@@ -305,7 +305,9 @@ class App:
 
     def _busy_off(self):
         self.busy = False
-        # stop() нужен только после start(); на determinate-полосе он сбрасывает value в 0
+        # stop() только в indeterminate: в determinate он сбрасывает value в 0
+        # (и обнулил бы показанный итог 100%). Остаточный after-таймер indeterminate
+        # гасим раньше смены режима, в _run_check - там это безопасно.
         if str(self.progress.cget("mode")) == "indeterminate":
             self.progress.stop()
         self.progress.pack_forget()
@@ -363,9 +365,13 @@ class App:
 
     def _run_check(self, total):
         """Проверка: determinate-полоса по числу проверенных, живые вверх, кэш по итогам."""
+        # погасить indeterminate-анимацию скачивания: её таймер Autoincrement иначе
+        # продолжает step() в determinate-режиме, борясь с value из воркера
+        self.progress.stop()
         self.progress.config(mode="determinate", maximum=total, value=0)
         self.progress.pack(fill="x", padx=8, pady=(0, 2), before=self.listbox)
-        pre = f"{getattr(self, '_load_prefix', '')}. "
+        p = getattr(self, "_load_prefix", "")
+        pre = f"{p}. " if p else ""
         self.set(f"{pre}Проверка (полный MTProto-хендшейк)...")
         threading.Thread(target=self._check, daemon=True).start()
 

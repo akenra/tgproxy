@@ -801,3 +801,25 @@ def test_settings_save_empty_url_keeps_cache(app, tk, monkeypatch):
     saved = json.loads(p.read_text(encoding="utf-8"))
     assert "list_url" not in saved
     assert saved.get("last_results") == {u("h", 443): True}
+
+
+def test_full_flow_progress_stops_autoincrement(app, tk, monkeypatch):
+    """Indeterminate-анимация остановлена при переходе в determinate,
+    иначе таймер ttk борется с value из воркера и портит все последующие прогоны."""
+    fresh = [(u(f"h{i}", 443), f"h{i}", 443) for i in range(3)]
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fresh, 0, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert str(app.progress.cget("mode")) == "determinate"
+    assert float(app.progress.cget("value")) == 3.0  # не скачет от автоинкремента
+
+
+def test_rerun_status_no_leading_dot(app, tk, monkeypatch):
+    """При перепроверке статус не начинается с лишней точки."""
+    app.proxies = [(u("h", 443), "h", 443)]
+    app.status = {u("h", 443): None}
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    assert not app.label.cget("text").startswith(". ")
