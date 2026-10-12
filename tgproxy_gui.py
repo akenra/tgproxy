@@ -4,7 +4,7 @@
 # Кроссплатформенно: tkinter + webbrowser, единственная зависимость - mtproxy-checker.
 import base64, json, os, queue, re, socket, sys, threading, time, traceback, webbrowser
 from concurrent.futures import ThreadPoolExecutor
-from tkinter import (Tk, Listbox, Button, Label, Toplevel, Entry, Frame,
+from tkinter import (Tk, Listbox, Button, Label, Toplevel, Entry, Frame, Text,
                      BOTH, LEFT, RIGHT, W, END, SINGLE, DISABLED, NORMAL, NW)
 from tkinter import ttk, Scrollbar
 from urllib import request as rq, parse as ps
@@ -435,8 +435,18 @@ class App:
             return
         win = self._help_win = Toplevel(self.root)
         win.title("Справка")
-        win.geometry("680x560")
-        Label(win, text=HELP, justify=LEFT, anchor=NW, wraplength=640).pack(fill=BOTH, expand=True, padx=12, pady=12)
+        win.geometry("680x600")
+        # ponytail: фиксированное окно. Текст HELP длиннее - нужен скролл,
+        # не раздувать окно бесконечно. Перепишешь HELP длиннее - поднимай высоту.
+        body = Frame(win)
+        body.pack(fill=BOTH, expand=True, padx=12, pady=12)
+        txt = Text(body, wrap="word", borderwidth=0, highlightthickness=0)
+        sb = Scrollbar(body, command=txt.yview)
+        txt.config(yscrollcommand=sb.set)
+        sb.pack(side=RIGHT, fill="y")
+        txt.pack(side=LEFT, fill=BOTH, expand=True)
+        txt.insert("1.0", HELP)
+        txt.config(state="disabled")  # только чтение
         Button(win, text="Закрыть", command=win.destroy).pack(pady=(0, 12))
 
     def show_settings(self):
