@@ -935,3 +935,114 @@ def test_executor_created_in_main_thread(app, tk, monkeypatch):
     assert getattr(app, "_ex", None) is None or app._ex._shutdown is False
     wait_done(app, tk)
     assert app._ex._shutdown is True  # with-блок закрыл
+
+
+# ---------- регрессии ----------
+
+def test_load_worker_catchall_releases_busy(app, tk, monkeypatch):
+    """Неожиданное исключение в хвосте _load_and_check не зависает busy."""
+    def boom_fetch(urls):
+        return [(u("h", 443), "h", 443)], 0, [], 0
+
+    monkeypatch.setattr(g, "fetch_all", boom_fetch)
+    monkeypatch.setattr(g, "valid", lambda url: (_ for _ in ()).throw(ValueError("кэш битый")))
+    p = tmp_settings(app)
+    p.write_text(json.dumps({"last_results": {u("cached", 443): True}}), encoding="utf-8")
+    app.custom_url = None
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert app.busy is False, "busy завис: кнопки не разблокировались"
+    assert "прервана" in app.label.cget("text").lower() or "ошибка" in app.label.cget("text").lower()
+
+
+def test_check_iteration_survives_cancelled_error(app, tk, monkeypatch):
+    """CancelledError (BaseException с 3.8) от отменённых фьючерсов гасится,
+    выход штатный через finally, threading-excepthook не дёргается."""
+    import concurrent.futures as cf
+    from concurrent.futures import ThreadPoolExecutor
+
+    real_init = ThreadPoolExecutor.__init__
+
+    def patched_init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        real_map = self.map
+
+        def map_with_cancel(fn, *iterables):
+            def gen():
+                yield True  # один результат прошёл
+                raise cf.CancelledError()  # дальше фьючерсы отменены закрытием окна
+            return gen()
+
+        self.map = map_with_cancel
+
+    monkeypatch.setattr(ThreadPoolExecutor, "__init__", patched_init)
+
+    url = u("h", 443)
+    app.proxies = [(url, "h", 443)]
+    app.status = {url: None}
+    monkeypatch.setattr(g, "alive", lambda x: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert app.busy is False
+
+
+def test_cancelled_error_branch_direct(app, tk, monkeypatch):
+    """CancelledError из итератора map гасится в главном потоке."""
+    import concurrent.futures as cf
+
+    def gen():
+        yield True
+        raise cf.CancelledError()
+
+    urls = [u(f"h{i}", 443) for i in range(3)]  # zip тянет urls[1] -> next(results) -> CancelledError
+    app.proxies = [(u, f"h{i}", 443) for i, u in enumerate(urls)]
+    app.status = {u: None for u in urls}
+    monkeypatch.setattr(g, "alive", lambda x: True)
+    # вызываем _check в главном потоке с фейковым executor'ом
+    class FakeEx:
+        def __init__(self):
+            self._shutdown = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self._shutdown = True
+            return False
+
+        def map(self, fn, urls):
+            return gen()
+
+    app._ex = FakeEx()
+    app._busy_on(indeterminate=False)
+    app._check()  # в главном потоке: CancelledError гасится, finally снимает busy
+    pump(tk, 200)
+    assert app.busy is False
+
+
+def test_refresh_keeps_scroll_position(app):
+    """rebuild списка не сбрасывает скролл посреди проверки."""
+    urls = [u(f"h{i}", 443) for i in range(30)]
+    app.proxies = [(x, f"h{i}", 443) for i, x in enumerate(urls)]
+    app.status = {x: None for x in urls}
+    app.refresh("")
+    app._do_refresh()
+    app.listbox.yview_moveto(0.5)
+    app.refresh("")
+    app._do_refresh()  # тот же контент: скролл должен выжить
+    assert abs(app.listbox.yview()[0] - 0.5) < 0.01
+
+
+def test_refresh_restores_selection(app):
+    """Выделение переживает rebuild (ветка selection_set)."""
+    urls = [u(f"h{i}", 443) for i in range(3)]
+    app.proxies = [(x, f"h{i}", 443) for i, x in enumerate(urls)]
+    app.status = {x: None for x in urls}
+    app.refresh("")
+    app._do_refresh()
+    app.listbox.selection_set(1)
+    app.refresh("")
+    app._do_refresh()
+    assert 1 in app.listbox.curselection()

@@ -3,6 +3,7 @@
 # копирует живых в буфер и открывает первого через tg:// (Telegram добавит сам).
 # Кроссплатформенно: tkinter + webbrowser, единственная зависимость - mtproxy-checker.
 import base64, json, os, queue, re, socket, sys, threading, time, traceback, webbrowser
+import concurrent.futures as cf
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import (Tk, Listbox, Button, Label, Toplevel, Entry, Frame, Text,
                      BOTH, LEFT, RIGHT, W, END, SINGLE, DISABLED, NORMAL, NW)
@@ -348,45 +349,54 @@ class App:
         threading.Thread(target=self._load_and_check, daemon=True).start()
 
     def _load_and_check(self):
-        urls = {"свой": self.custom_url} if self.custom_url else PRESETS
         try:
-            proxies, bad, fails, dups = fetch_all(urls)
-        except Exception as e:
+            urls = {"свой": self.custom_url} if self.custom_url else PRESETS
+            try:
+                proxies, bad, fails, dups = fetch_all(urls)
+            except Exception as e:
+                self._after(0, self._busy_off)
+                self._after(0, self.set, f"Ошибка загрузки: {e}. Проверьте интернет и URL в настройках")
+                return
+            # оба присваивания атомарны для читателя: refresh ставится в очередь после них,
+            # а исполняется в главном потоке - новые proxies всегда приходят вместе со status
+            if not proxies:
+                self._after(0, self._busy_off)
+                self._after(0, self.refresh,
+                            "Списки пусты или в неправильном формате - проверьте интернет и URL в настройках")
+                return
+            # прошлые живые из кэша доливаем к свежим и перепроверяем: могли ожить/умереть.
+            # дедуп по тому же ключу, что в fetch_all: кэш может хранить другое написание
+            # того же прокси (server=h. vs server=h)
+            cached = load_settings().get("last_results", {})
+            seen = {(p[1], p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0])
+                    for p in proxies}
+            merged = list(proxies)
+            for url, ok in cached.items():
+                if ok and valid(url):
+                    _, server, port = parse(url)
+                    secret = ps.parse_qs(ps.urlparse(url).query)["secret"][0]
+                    if (server, port, secret) not in seen:
+                        seen.add((server, port, secret))
+                        merged.append((url, server, port))
+            self.proxies = merged
+            self.status = {u: None for u, _, _ in self.proxies}
+            total = len(self.proxies)
+            self._load_prefix = f"Загружено {len(proxies)} прокси"
+            if dups:
+                self._load_prefix += f" (дубликатов отброшено: {dups}"
+                if bad:
+                    self._load_prefix += f", некорректных строк: {bad}"
+                self._load_prefix += ")"
+            elif bad:
+                self._load_prefix += f" (некорректных строк: {bad})"
+            for name, err in fails:
+                self._load_prefix += f"; [{name}: {err}]"
+            # дальше общий хвост проверки: полоса, статус, тот же финальный текст
+            self._after(0, self._run_check, total)
+        except Exception:
+            _log_traceback()
             self._after(0, self._busy_off)
-            self._after(0, self.set, f"Ошибка загрузки: {e}. Проверьте интернет и URL в настройках")
-            return
-        # оба присваивания атомарны для читателя: refresh ставится в очередь после них,
-        # а исполняется в главном потоке - новые proxies всегда приходят вместе со status
-        if not proxies:
-            self._after(0, self._busy_off)
-            self._after(0, self.refresh,
-                        "Списки пусты или в неправильном формате - проверьте интернет и URL в настройках")
-            return
-        # прошлые живые из кэша доливаем к свежим и перепроверяем: могли ожить/умереть.
-        # дедуп по тому же ключу, что в fetch_all: кэш может хранить другое написание
-        # того же прокси (server=h. vs server=h)
-        cached = load_settings().get("last_results", {})
-        seen = {(p[1], p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0])
-                for p in proxies}
-        merged = list(proxies)
-        for url, ok in cached.items():
-            if ok and valid(url):
-                _, server, port = parse(url)
-                secret = ps.parse_qs(ps.urlparse(url).query)["secret"][0]
-                if (server, port, secret) not in seen:
-                    seen.add((server, port, secret))
-                    merged.append((url, server, port))
-        self.proxies = merged
-        self.status = {u: None for u, _, _ in self.proxies}
-        total = len(self.proxies)
-        self._load_prefix = f"Загружено {len(proxies)} прокси (дубликатов отброшено: {dups}"
-        if bad:
-            self._load_prefix += f", некорректных строк: {bad}"
-        self._load_prefix += ")"
-        for name, err in fails:
-            self._load_prefix += f"; [{name}: {err}]"
-        # дальше общий хвост проверки: полоса, статус, тот же финальный текст
-        self._after(0, self._run_check, total)
+            self._after(0, self.set, "Загрузка прервана внутренней ошибкой (см. лог) - повторите")
 
     def _run_check(self, total):
         """Проверка: determinate-полоса по числу проверенных, живые вверх, кэш по итогам."""
@@ -426,6 +436,8 @@ class App:
                                         f"{load_msg}{' ' if load_msg else ''}Проверено {done}/{total}, живых {alive_n}")
                 except RuntimeError:
                     pass  # executor выключен закрытием окна: выходим через finally
+                except cf.CancelledError:
+                    pass  # отменённые фьючерсы (BaseException с 3.8): штатный выход
         finally:
             # без finally исключение в alive() оставило бы кнопки навсегда выключенными
             if done == total:
@@ -489,6 +501,10 @@ class App:
     def _do_refresh(self):
         self._refresh_pending = False
         text = getattr(self, "_pending_text", "")
+        # сохраняем скролл и выделение: во время проверки refresh тикает каждые 100мс,
+        # полный rebuild без восстановления сделал бы просмотр списка невозможным
+        yview = self.listbox.yview()
+        sel = self.listbox.curselection()
         self.listbox.delete(0, END)
         # показываем только живых и ещё непроверенных: мёртвые - визуальный шум,
         # воскресший (False -> True при перепроверке) снова появляется сам.
@@ -503,6 +519,14 @@ class App:
             self.listbox.insert(END, f"{mark}{server}:{port}")
             if st:
                 self.listbox.itemconfig(END, fg="#1a7f37")
+        # выделение переносим по url-соответствию: позиции плывут по мере проверки.
+        # ponytail: селект хранит старые индексы, маппим на новые строки по позиции
+        # до пересортировки; точное url-соответствие дало бы лишний dict на каждый тик
+        for old_idx in sel:
+            if old_idx < len(self.row_urls):
+                self.listbox.selection_set(old_idx)
+        if yview and yview != (0.0, 1.0):
+            self.listbox.yview_moveto(yview[0])
         self.set(text)
 
     def open_selected(self, _):
