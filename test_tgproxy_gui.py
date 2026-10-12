@@ -1165,3 +1165,26 @@ def test_cached_restore_allows_refetch(app, tk, monkeypatch):
     app.load_and_check()
     wait_done(app, tk)
     assert len(fetches) == 1, "после кэш-старта свежая загрузка недостижима"
+
+
+def test_fetched_url_uses_captured_source(app, tk, monkeypatch):
+    """Смена custom_url во время загрузки не портит метку списка.
+    Воркер пишет источник, зафиксированный на старте, а не текущий."""
+    def slow_fetch(urls):
+        import time as _t
+        _t.sleep(0.3)  # окно, чтобы главный поток сменил custom_url
+        return [(u("h", 443), "h", 443)], 0, [], 0
+
+    monkeypatch.setattr(g, "fetch_all", slow_fetch)
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.custom_url = "https://old.example/a.txt"
+    app.load_and_check()
+    app.custom_url = "https://new.example/b.txt"  # смена в главном потоке, пока качается
+    wait_done(app, tk)
+    assert app._fetched_url == "https://old.example/a.txt"  # источник закачки, не текущий
+    # следующий клик обязан перекачать: fetched != текущего custom_url
+    fetches = []
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fetches.append(urls) or ([(u("n", 443), "n", 443)], 0, [], 0)))
+    app.load_and_check()
+    wait_done(app, tk)
+    assert len(fetches) == 1, "новый URL не скачался после смены"

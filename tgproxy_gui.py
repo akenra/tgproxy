@@ -355,9 +355,12 @@ class App:
         self._busy_on()
         src = self.custom_url or "все предустановленные источники"
         self.set(f"Загрузка {src} ...")
-        threading.Thread(target=self._load_and_check, daemon=True).start()
+        # источник фиксируем до старта потока: пользователь может сменить URL
+        # в настройках, пока качается, - список должен остаться помечен старым
+        src_url = self.custom_url
+        threading.Thread(target=self._load_and_check, args=(src_url,), daemon=True).start()
 
-    def _load_and_check(self):
+    def _load_and_check(self, src_url):
         try:
             urls = {"свой": self.custom_url} if self.custom_url else PRESETS
             try:
@@ -388,9 +391,10 @@ class App:
                     if ckey not in seen:
                         seen.add(ckey)
                         merged.append((url, server, port))
-            self.proxies = merged
-            self._fetched_url = self.custom_url or ""  # "" = скачали дефолтные источники
-            self.status = {u: None for u, _, _ in self.proxies}
+            # одна пара присваиваний: главный поток между ними увидит новый список
+            # со старым статусом (строки подпрыгнут с ложным [ ? ])
+            self.proxies, self.status = merged, {u: None for u, _, _ in merged}
+            self._fetched_url = src_url or ""  # источник, по которому реально качали
             total = len(self.proxies)
             self._load_prefix = f"Загружено {len(proxies)} прокси"
             if dups:
