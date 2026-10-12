@@ -406,10 +406,12 @@ class App:
                     if ckey not in seen:
                         seen.add(ckey)
                         merged.append((url, server, port))
-            # снапшот одним кортежем: STORE_ATTR пары - это два байткода, между ними
-            # _do_refresh в главном потоке увидел бы новый список со старым статусом
-            self._snapshot = (merged, {u: None for u, _, _ in merged})
-            self.proxies, self.status = self._snapshot
+            # присваивание пары - это два STORE_ATTR: отложенный _do_refresh прошлого
+            # прогона может увидеть новый список со старым статусом (транзиентное
+            # «[ ? ]» на один тик, самоисцеляется через 100мс). Снапшот-кортеж не
+            # помогает - те же два STORE_ATTR; единый _data потребовал бы
+            # рефакторинга всех читателей ради 100мс-мигания
+            self.proxies, self.status = merged, {u: None for u, _, _ in merged}
             self._fetched_url = src_url or ""  # источник, по которому реально качали
             total = len(self.proxies)
             self._load_prefix = f"Загружено {len(proxies)} прокси"
@@ -545,18 +547,18 @@ class App:
         rows = [(p, self.status.get(p[0])) for p in self.proxies]
         rows = [(p, st) for p, st in rows if st is not False]
         rows.sort(key=lambda t: 0 if t[1] else 1)
+        # выделение переносим по url, а не по индексу: сортировка alive-first
+        # двигает строки, селект по индексу «переезжал» на другого прокси
+        sel_urls = {self.row_urls[i] for i in sel if i < len(self.row_urls)}
         self.row_urls = [p[0] for p, _ in rows]
         for (url, server, port), st in rows:
             mark = "[живой] " if st else "[ ?    ] "
             self.listbox.insert(END, f"{mark}{server}:{port}")
             if st:
                 self.listbox.itemconfig(END, fg="#1a7f37")
-        # выделение переносим по url-соответствию: позиции плывут по мере проверки.
-        # ponytail: селект хранит старые индексы, маппим на новые строки по позиции
-        # до пересортировки; точное url-соответствие дало бы лишний dict на каждый тик
-        for old_idx in sel:
-            if old_idx < len(self.row_urls):
-                self.listbox.selection_set(old_idx)
+        for url in sel_urls:
+            if url in self.row_urls:
+                self.listbox.selection_set(self.row_urls.index(url))
         if yview and yview != (0.0, 1.0):
             self.listbox.yview_moveto(yview[0])
         self.set(text)

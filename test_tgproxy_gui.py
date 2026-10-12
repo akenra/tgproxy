@@ -1247,14 +1247,19 @@ def test_tk_error_swallows_permission_error(app, tk, tmp_path, monkeypatch):
         raise AssertionError(f"_tk_error роняет: {e}")
 
 
-def test_snapshot_pair_assignment_atomic(app, tk, monkeypatch):
-    """Proxies и status меняются из одного кортежа-снапшота."""
+def test_refresh_tolerates_mid_pair_assignment(app, tk, monkeypatch):
+    """Пара proxies/status присваивается двумя STORE_ATTR; отложенный
+    _do_refresh может увидеть новый список со старым статусом - refresh не должен
+    падать (status.get с fallback None)."""
     monkeypatch.setattr(g, "fetch_all", lambda urls: ([(u("h", 443), "h", 443)], 0, [], 0))
     monkeypatch.setattr(g, "alive", lambda url: True)
     app.load_and_check()
     wait_done(app, tk)
-    assert app._snapshot[0] == app.proxies
-    assert app._snapshot[1] == app.status
+    pump(tk, 200)
+    # симулируем окно между STORE_ATTR: новый список, старый статус
+    app.proxies, app.status = [(u("new", 443), "new", 443)], app.status
+    app._do_refresh()  # не должно кинуть KeyError
+    assert len(app.row_urls) == 1
 
 
 def test_dedup_base64_secret_case_sensitive(app, tk, monkeypatch):
@@ -1270,3 +1275,26 @@ def test_dedup_base64_secret_case_sensitive(app, tk, monkeypatch):
     wait_done(app, tk)
     pump(tk, 200)
     assert len(app.proxies) == 2, "base64url-секреты схлопнуты дедупом: живой потерян"
+
+
+def test_selection_follows_proxy_after_resort(app, tk, monkeypatch):
+    """Селект по url, а не по индексу - сортировка alive-first
+    двигает строки, селект не должен переезжать на другого прокси."""
+    urls = [u(f"s{i}", 443) for i in range(3)]
+    monkeypatch.setattr(g, "fetch_all", lambda src: ([(u_, f"s{i}", 443) for i, u_ in enumerate(urls)], 0, [], 0))
+    states = {urls[0]: False, urls[1]: None, urls[2]: None}
+    monkeypatch.setattr(g, "alive", lambda url: states[url])
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    # выбран непроверенный urls[1] (внизу списка, живых нет)
+    idx = app.row_urls.index(urls[1])
+    app.listbox.selection_clear(0, "end")
+    app.listbox.selection_set(idx)
+    # s0 ожил: сортировка поднимет его, строки сдвинутся
+    states[urls[0]] = True
+    app.refresh("")
+    app._do_refresh()
+    new_idx = app.row_urls.index(urls[1])
+    selected = app.listbox.curselection()
+    assert selected and selected[0] == new_idx, "селект переехал на другого прокси"
