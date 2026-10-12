@@ -1046,3 +1046,15 @@ def test_refresh_restores_selection(app):
     app.refresh("")
     app._do_refresh()
     assert 1 in app.listbox.curselection()
+
+
+def test_load_prefix_counts_bad_only(app, tk, monkeypatch):
+    """Ветка «только некорректные строки» (без дубликатов)."""
+    fresh = [(u("h", 443), "h", 443)]
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fresh, 5, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert "некорректных строк: 5" in app.label.cget("text")
+    assert "дубликатов" not in app.label.cget("text")
