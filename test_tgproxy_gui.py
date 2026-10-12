@@ -80,7 +80,7 @@ def click_button(win, text):
 def test_initial_state(app):
     assert app.proxies == []
     assert app.busy is False
-    assert "1. Загрузить" in app.label.cget("text")
+    assert "1. Проверить прокси" in app.label.cget("text")
 
 
 def test_busy_blocks_buttons(app):
@@ -89,10 +89,9 @@ def test_busy_blocks_buttons(app):
     app._busy_on()
     assert app.busy is True
     assert str(app.btn_load.cget("state")) == "disabled"
-    assert str(app.btn_check.cget("state")) == "disabled"
     assert str(app.btn_enable.cget("state")) == "disabled"
     # повторные load/check/enable игнорируются
-    app.load_and_check(); app.check(); app.enable()
+    app.load_and_check(); app.load_and_check(); app.enable()
     app._busy_off()
     assert app.busy is False
     assert str(app.btn_enable.cget("state")) == "normal"
@@ -104,7 +103,7 @@ def test_check_progress_not_animated(app, tk, monkeypatch):
     app.proxies = [(u("h", 443), "h", 443)]
     app.status = {app.proxies[0][0]: None}
     monkeypatch.setattr(g, "alive", lambda url: True)
-    app.check()
+    app.load_and_check()
     assert str(app.progress.cget("mode")) == "determinate"
     assert app.progress.cget("maximum") == 1
     for _ in range(500):
@@ -117,15 +116,20 @@ def test_check_progress_not_animated(app, tk, monkeypatch):
     assert str(app.progress.cget("mode")) == "determinate"
 
 
-def test_check_without_proxies_hints(app):
-    app.check()
-    assert "Загрузить" in app.label.cget("text")
+def test_check_without_proxies_hints(app, tk, tmp_path, monkeypatch):
+    """Пустое состояние: кнопка качает списки, а не ругается."""
+    monkeypatch.setattr(g, "SETTINGS", str(tmp_path / "s.json"))
+    monkeypatch.setattr(g, "fetch_all", lambda urls: ([(u("h", 443), "h", 443)], 0, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
     assert app.busy is False
+    assert app.status[u("h", 443)] is True
 
 
 def test_enable_without_proxies_hints(app):
     app.enable()
-    assert "Загрузить" in app.label.cget("text")
+    assert "Проверить прокси" in app.label.cget("text")
 
 
 def test_enable_without_alive_hints(app):
@@ -143,7 +147,7 @@ def test_check_updates_status_and_unblocks(app, tk, monkeypatch):
     app.status = {p[0]: None for p in app.proxies}
     # первый живой, остальные мёртвые; вместо сети - мгновенная заглушка
     monkeypatch.setattr(g, "alive", lambda url: "server=h0&" in url)
-    app.check()
+    app.load_and_check()
     # крутим цикл, пока поток не закончит (busy снимется)
     for _ in range(500):
         pump(tk, 20)
@@ -165,7 +169,7 @@ def test_check_alive_exception_still_unblocks(app, tk, monkeypatch):
         raise RuntimeError("сеть умерла")
 
     monkeypatch.setattr(g, "alive", boom)
-    app.check()
+    app.load_and_check()
     for _ in range(500):
         pump(tk, 20)
         if not app.busy:
@@ -175,17 +179,28 @@ def test_check_alive_exception_still_unblocks(app, tk, monkeypatch):
 
 # ---------- refresh: сортировка и подписи ----------
 
-def test_refresh_sorts_alive_first(app):
+def test_refresh_hides_dead_shows_alive_and_unknown(app):
+    """Мёртвые не отображаются (визуальный шум), живые сверху, непроверенные следом."""
     urls = [u("dead", 443), u("alive", 443), u("unknown", 443)]
     app.proxies = [(x, x.split("server=")[1], 443) for x in urls]
     app.status = {urls[0]: False, urls[1]: True, urls[2]: None}
     app.refresh("тест")
     app._do_refresh()  # сразу, не дожидаясь батчинга
     rows = app.listbox.get(0, "end")
+    assert len(rows) == 2, rows  # мёртвого нет
     assert rows[0].startswith("[живой]"), rows
     assert rows[1].startswith("[ ?"), rows
-    assert rows[2].startswith("[мёртв]"), rows
-    assert app.row_urls[0] == urls[1]  # двойной клик откроет именно живого
+    assert app.row_urls == [urls[1], urls[2]]  # двойной клик откроет именно живого
+
+
+def test_refresh_resurrected_dead_reappears(app):
+    """Мёртвый, воскресший при перепроверке (False -> True), снова виден."""
+    url = u("back", 443)
+    app.proxies = [(url, "back", 443)]
+    app.status = {url: True}  # был мёртв, перепроверка сказала жив
+    app._do_refresh()
+    rows = app.listbox.get(0, "end")
+    assert len(rows) == 1 and rows[0].startswith("[живой]")
 
 
 def test_double_click_disabled_when_busy(app, tk, monkeypatch):
@@ -271,7 +286,7 @@ def test_load_and_check_full_flow(app, tk, monkeypatch):
     assert app.status == {u("live", 443): True, u("dead", 443): False}
     text = app.label.cget("text")
     assert "Готово: живых 1 из 2" in text
-    assert "3. Включить" in text
+    assert "2. Включить" in text
     assert app.busy is False
 
 
@@ -364,8 +379,9 @@ def test_drain_executes_queued_callbacks(app, tk):
     assert calls == ["x"]
 
 
-def test_drain_survives_dead_window(app, tk):
+def test_drain_survives_dead_window(app, tk, tmp_path, monkeypatch):
     """after() на уничтоженном виджете не роняет _drain."""
+    monkeypatch.setattr(g, "ERROR_LOG", str(tmp_path / "err.log"))  # ошибка колбэка - в tmp-лог
     from tkinter import Toplevel
     w = Toplevel(tk)
     w.destroy()
@@ -489,8 +505,9 @@ def test_double_click_webbrowser_exception_falls_back(app, tk, monkeypatch):
     assert "Не удалось" in app.label.cget("text")
 
 
-def test_drain_swallows_after_error_on_destroyed_root(app, tk, monkeypatch):
+def test_drain_swallows_after_error_on_destroyed_root(app, tk, monkeypatch, tmp_path):
     """root.after() бросил (окно закрывается): _drain глотает и продолжает поллить."""
+    monkeypatch.setattr(g, "ERROR_LOG", str(tmp_path / "err.log"))  # не писать в реальный лог
     done = []
 
     # вариант 1: колбэк пользователя "умер" вместе с окном
@@ -585,7 +602,7 @@ def test_check_rerun_overwrites_old_status(app, tk, monkeypatch):
     app.proxies = [(u("h", 443), "h", 443)]
     app.status = {app.proxies[0][0]: True}  # старый прогон
     monkeypatch.setattr(g, "alive", lambda url: False)
-    app.check()
+    app.load_and_check()
     wait_done(app, tk)
     assert app.status[app.proxies[0][0]] is False
     pump(tk, 200)  # refresh батчится на 100мс: дожидаемся финального текста
@@ -695,9 +712,9 @@ def test_check_zero_alive_suggests_refresh(app, tk, monkeypatch, tmp_path):
     monkeypatch.setattr(g, "SETTINGS", str(tmp_path / "s.json"))  # не писать кэш в реальный файл
     app.proxies = [(u("x", 443), "x", 443)]
     monkeypatch.setattr(g, "alive", lambda url: False)
-    app.check()
+    app.load_and_check()
     wait_done(app, tk)
     pump(tk, 200)
     text = app.label.cget("text")
     assert "Готово: живых 0" in text
-    assert "1. Загрузить" in text
+    assert "источники устарели" in text
