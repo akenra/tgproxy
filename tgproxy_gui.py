@@ -212,6 +212,7 @@ class App:
         self.root = root
         self._q = queue.Queue()
         self.proxies = []       # [(url, server, port)]
+        self._fetched_url = None  # источник текущего списка (None = ещё не качали)
         self.status = {}        # url -> True/False/None (None = не проверен)
         self.custom_url = load_settings().get("list_url")  # None = все предустановленные
         self.busy = False       # защита от двойных нажатий
@@ -340,10 +341,12 @@ class App:
 
     def load_and_check(self):
         """Кнопка проверки работает по состоянию. Нет списка - скачать и проверить;
-        список уже есть (кэш старта или прошлый прогон) - перепроверить без скачивания."""
+        список уже есть - перепроверить без скачивания. custom_url, изменённый
+        после прошлой загрузки, форсирует перекачку: иначе новый источник
+        заработал бы только после перезапуска."""
         if self.busy:
             return
-        if self.proxies:
+        if self.proxies and self._fetched_url == self.custom_url:
             self._load_prefix = ""  # перепроверка без скачивания: старый текст «Загружено N» устарел
             self._busy_on(indeterminate=False)
             self._run_check(len(self.proxies))
@@ -385,6 +388,7 @@ class App:
                         seen.add(ckey)
                         merged.append((url, server, port))
             self.proxies = merged
+            self._fetched_url = self.custom_url  # запомнить источник этого списка
             self.status = {u: None for u, _, _ in self.proxies}
             total = len(self.proxies)
             self._load_prefix = f"Загружено {len(proxies)} прокси"

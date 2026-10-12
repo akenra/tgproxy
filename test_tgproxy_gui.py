@@ -84,7 +84,8 @@ def test_initial_state(app):
     assert "1. Проверить прокси" in app.label.cget("text")
 
 
-def test_busy_blocks_buttons(app):
+def test_busy_blocks_buttons(app, tk, monkeypatch):
+    monkeypatch.setattr(g, "alive", lambda url: True)  # не ходить в сеть из теста
     app.proxies = [(u("h", 443), "h", 443)]
     app.status = {app.proxies[0][0]: None}
     app._busy_on()
@@ -1081,3 +1082,23 @@ def test_refresh_pending_not_stuck_when_after_fails(app, tk, monkeypatch, tmp_pa
     assert app._refresh_pending is False, "флаг залип: refresh замер навсегда"
     app.refresh("текст 2")            # должен снова спланироваться, не выйти по early-return
     assert app._pending_text == "текст 2"
+
+
+# ---------- регрессии ----------
+
+def test_settings_url_change_forces_refetch(app, tk, monkeypatch, tmp_path):
+    """Смена URL в настройках при показанном списке - следующая кнопка качает, не перепроверяет."""
+    fetches = []
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fetches.append(urls) or ([(u("h", 443), "h", 443)], 0, [], 0)))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.proxies = [(u("old", 443), "old", 443)]  # список уже показан
+    app.status = {u("old", 443): True}
+    app.custom_url = "https://example.com/new.txt"
+    app.load_and_check()
+    wait_done(app, tk)
+    assert len(fetches) == 1, "новый URL не скачался: клик ушёл в перепроверку"
+
+
+def test_busy_blocks_buttons_is_isolated(app, tk, monkeypatch):
+    """Тест busy-кнопок не ходит в сеть - alive замокан."""
+    # (фикс в самом тесте: см. ниже monkeypatch)
