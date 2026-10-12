@@ -29,15 +29,15 @@ HELP = """ЧТО ДЕЛАЕТ ЭТА ПРОГРАММА
 
 ПОРЯДОК РАБОТЫ: ТРИ КНОПКИ СЛЕВА НАПРАВО
 
-1. «Загрузить»  - скачивает список прокси по URL из настроек.
-   Ожидаемый формат: по одной ссылке на строку,
-   https://t.me/proxy?server=ХОСТ&port=ПОРТ&secret=СЕКРЕТ
-   Битые строки пропускаются, их количество показывается в статусе.
+1. «Загрузить и проверить» - главное действие: скачивает списки прокси
+   (по URL из настроек, формат: по одной ссылке на строку,
+   https://t.me/proxy?server=ХОСТ&port=ПОРТ&secret=СЕКРЕТ) и сразу
+   проверяет их. Прошлые живые из кэша доливаются к свежему списку
+   и перепроверяются. Битые строки пропускаются, их количество
+   показывается в статусе.
 
-2. «Проверить»  - гоняет все адреса через полную проверку
-   (TCP + MTProto-хендшейк с секретом + ответ Telegram).
-   Занимает около минуты. По ходу: зелёные сверху - живые,
-   красные внизу - мёртвые, серые - ещё не проверены.
+2. «Проверить»  - перепроверить уже показанный список (кэш старта
+   или прошлый прогон), без скачивания.
 
 3. «Включить»   - делает два действия:
    - копирует живых в буфер обмена (можно вставить списком в Telegram:
@@ -197,8 +197,8 @@ class App:
         root.minsize(560, 380)
 
         self.label = Label(root, wraplength=740, justify=LEFT,
-                           text="Начните с кнопки «1. Загрузить» слева внизу. "
-                                     "Подробная инструкция - кнопка «?» справа внизу.", anchor=W)
+                           text="Нажмите «1. Загрузить и проверить»: скачает свежий список "
+                                     "и сразу проверит. Подробная инструкция - кнопка «?» справа внизу.", anchor=W)
         self.label.pack(fill=BOTH, padx=8, pady=(8, 2))
 
         self._restore_cached()
@@ -217,7 +217,7 @@ class App:
 
         bar = Frame(root)
         bar.pack(fill=BOTH, padx=8, pady=(0, 8))
-        self.btn_load = Button(bar, text="1. Загрузить", width=14, command=self.load)
+        self.btn_load = Button(bar, text="1. Загрузить и проверить", width=22, command=self.load_and_check)
         self.btn_check = Button(bar, text="2. Проверить", width=14, command=self.check)
         self.btn_enable = Button(bar, text="3. Включить", width=14, command=self.enable)
         self.btn_load.pack(side=LEFT, padx=2)
@@ -251,8 +251,8 @@ class App:
         self.status = {url: cached[url] for url, _, _ in rows}
         self.refresh(f"Восстановлено из кэша прошлой проверки: {len(rows)} прокси, "
                      f"живых {sum(1 for v in self.status.values() if v)}. "
-                     f"Нажмите «2. Проверить», чтобы проверить заново, "
-                     f"или «1. Загрузить» - свежий список из интернета")
+                     f"Нажмите «2. Проверить», чтобы перепроверить их, "
+                     f"или «1. Загрузить и проверить» - свежий список из интернета")
 
     def _tk_error(self, exc_type, exc_value, tb):
         # исключение в Tk-колбэке (windowed-exe без stderr): в файл, не молча
@@ -307,15 +307,16 @@ class App:
         for b in (self.btn_load, self.btn_check, self.btn_enable):
             b.config(state=NORMAL)
 
-    def load(self):
+    def load_and_check(self):
+        """Главное действие: скачать списки и сразу проверить. Кэш живых доливается."""
         if self.busy:
             return
         self._busy_on()
         src = self.custom_url or "все предустановленные источники"
         self.set(f"Загрузка {src} ...")
-        threading.Thread(target=self._load, daemon=True).start()
+        threading.Thread(target=self._load_and_check, daemon=True).start()
 
-    def _load(self):
+    def _load_and_check(self):
         urls = {"свой": self.custom_url} if self.custom_url else PRESETS
         try:
             proxies, bad, fails, dups = fetch_all(urls)
@@ -325,29 +326,47 @@ class App:
             return
         # оба присваивания атомарны для читателя: refresh ставится в очередь после них,
         # а исполняется в главном потоке - новые proxies всегда приходят вместе со status
-        self.proxies = proxies
+        if not proxies:
+            self._after(0, self._busy_off)
+            self._after(0, self.refresh,
+                        "Списки пусты или в неправильном формате - проверьте интернет и URL в настройках")
+            return
+        # прошлые живые из кэша доливаем к свежим и перепроверяем: могли ожить/умереть
+        cached = load_settings().get("last_results", {})
+        fresh_urls = {p[0] for p in proxies}
+        merged = list(proxies)
+        for url, ok in cached.items():
+            if ok and url not in fresh_urls and valid(url):
+                merged.append((url, *parse(url)[1:]))
+        self.proxies = merged
         self.status = {u: None for u, _, _ in self.proxies}
-        msg = f"Загружено {len(self.proxies)} прокси (дубликатов отброшено: {dups}), теперь нажмите «2. Проверить»"
+        total = len(self.proxies)
+        self._load_prefix = f"Загружено {len(proxies)} прокси (дубликатов отброшено: {dups}"
         if bad:
-            msg += f" (некорректных строк: {bad})"
+            self._load_prefix += f", некорректных строк: {bad}"
+        self._load_prefix += ")"
         for name, err in fails:
-            msg += f"; [{name}: {err}]"
-        if not self.proxies:
-            msg = "Списки пусты или в неправильном формате - проверьте интернет и URL в настройках"
-        self._after(0, self._busy_off)
-        self._after(0, self.refresh, msg)
+            self._load_prefix += f"; [{name}: {err}]"
+        # дальше общий хвост проверки: полоса, статус, тот же финальный текст
+        self._after(0, self._run_check, None, total)
+
+    def _run_check(self, prefix, total):
+        """Общая проверка: determinate-полоса, живые вверх, кэш по итогам."""
+        self.progress.config(mode="determinate", maximum=total, value=0)
+        self.progress.pack(fill="x", padx=8, pady=(0, 2), before=self.listbox)
+        pre = f"{getattr(self, '_load_prefix', '')}. " if prefix is None else (f"{prefix}. " if prefix else "")
+        self.set(f"{pre}Проверка (полный MTProto-хендшейк)...")
+        threading.Thread(target=self._check, daemon=True).start()
 
     def check(self):
+        """Перепроверить уже загруженный список (кэш старта или прошлый прогон)."""
         if self.busy:
             return
         if not self.proxies:
-            self.set("Сначала «1. Загрузить»")
+            self.set("Сначала «1. Загрузить и проверить»")
             return
         self._busy_on(indeterminate=False)
-        self.progress.config(mode="determinate", maximum=len(self.proxies), value=0)
-        self.progress.pack(fill="x", padx=8, pady=(0, 2), before=self.listbox)
-        self.set(f"Проверка (полный MTProto-хендшейк), обычно несколько минут...")
-        threading.Thread(target=self._check, daemon=True).start()
+        self._run_check("", len(self.proxies))
 
     def _check(self):
         # прошлые живые проверяем первыми: пользователь скорее всего ждёт их
@@ -356,6 +375,7 @@ class App:
         urls.sort(key=lambda u: not last.get(u, False))
         total = len(urls)
         done = alive_n = 0
+        load_msg = getattr(self, "_load_prefix", "")  # счётчики загрузки из load_and_check
         try:
             with ThreadPoolExecutor(128) as ex:
                 for url, ok in zip(urls, ex.map(alive, urls)):
@@ -364,20 +384,21 @@ class App:
                     alive_n += ok
                     self._after(0, lambda v=done: self.progress.config(value=v))
                     self._after(0, self.refresh,
-                                    f"Проверено {done}/{total}, живых {alive_n}")
+                                    f"{load_msg}{' ' if load_msg else ''}Проверено {done}/{total}, живых {alive_n}")
         finally:
             # без finally исключение в alive() оставило бы кнопки навсегда выключенными
             if done == total:
                 save_last_results(self.status)  # кэш для приоритета в следующий раз
             self._after(0, self._busy_off)
             if done == total:
+                tail = f" {load_msg}" if load_msg else ""
                 if alive_n == 0 and total > 0:
                     self._after(0, self.refresh,
-                                f"Готово: живых 0 из {total}. Возможно, список устарел - "
-                                f"нажмите «1. Загрузить» для свежего списка из интернета "
-                                f"и проверьте снова")
+                                f"Готово: живых 0 из {total}.{tail} Возможно, список устарел - "
+                                f"нажмите «1. Загрузить и проверить» для свежего списка")
                 else:
-                    self._after(0, self.refresh, f"Готово: живых {alive_n} из {total}. Теперь «3. Включить»")
+                    self._after(0, self.refresh,
+                                f"Готово: живых {alive_n} из {total}.{tail} Теперь «3. Включить»")
             else:  # оборвалось исключением: не выдаём проверку за завершённую
                 self._after(0, self.refresh,
                             f"Проверка прервана на {done}/{total}, живых {alive_n}. Повторите «2. Проверить»")
@@ -386,7 +407,7 @@ class App:
         if self.busy:
             return
         if not self.proxies:
-            self.set("Сначала «1. Загрузить» и «2. Проверить»")
+            self.set("Сначала «1. Загрузить и проверить» и «2. Проверить»")
             return
         # порядок загрузки: первый живой = верхний [живой] в списке, как видит пользователь
         good = [u for u, _, _ in self.proxies if self.status.get(u)]
@@ -504,8 +525,8 @@ class App:
                 return
             self.custom_url = url
             win.destroy()
-            self.set("Источники: все предустановленные. Нажмите «1. Загрузить»." if not url
-                     else f"URL сохранён: {url}. Нажмите «1. Загрузить».")
+            self.set("Источники: все предустановленные. Нажмите «1. Загрузить и проверить»." if not url
+                     else f"URL сохранён: {url}. Нажмите «1. Загрузить и проверить».")
 
         Button(win, text="Сохранить", command=save).pack(side=LEFT, padx=12, pady=8)
         Button(win, text="Все предустановленные",

@@ -43,6 +43,12 @@ def u(server, port, secret="a" * 32):
     return f"https://t.me/proxy?server={server}&port={port}&secret={secret}"
 
 
+def tmp_settings(app):
+    """Путь к временному SETTINGS из fixture app (для записи кэша до действия)."""
+    import tgproxy_gui as _g
+    return __import__("pathlib").Path(_g.SETTINGS)
+
+
 def pump(root, ms=250):
     """Прокрутить событийный цикл Tk ms миллисекунд без mainloop."""
     end = time.monotonic() + ms / 1000
@@ -86,7 +92,7 @@ def test_busy_blocks_buttons(app):
     assert str(app.btn_check.cget("state")) == "disabled"
     assert str(app.btn_enable.cget("state")) == "disabled"
     # повторные load/check/enable игнорируются
-    app.load(); app.check(); app.enable()
+    app.load_and_check(); app.check(); app.enable()
     app._busy_off()
     assert app.busy is False
     assert str(app.btn_enable.cget("state")) == "normal"
@@ -254,21 +260,50 @@ def test_load_settings_ok(tmp_path, monkeypatch):
 
 # ---------- load: фоновая загрузка с подменой fetch_all ----------
 
-def test_load_fetch_and_status_reset(app, tk, monkeypatch):
-    """Загрузка: список подменяется, статусы сбрасываются, busy снимается."""
-    app.proxies = [(u("old", 443), "old", 443)]
-    app.status = {u("old", 443): True}
+def test_load_and_check_full_flow(app, tk, monkeypatch):
+    """Кнопка 1: fetch + сразу проверка; статусы заполняются, финальный текст с итогом."""
+    fresh = [(u("live", 443), "live", 443), (u("dead", 443), "dead", 443)]
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fresh, 0, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: "server=live&" in url)
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert app.status == {u("live", 443): True, u("dead", 443): False}
+    text = app.label.cget("text")
+    assert "Готово: живых 1 из 2" in text
+    assert "3. Включить" in text
+    assert app.busy is False
+
+
+def test_load_and_check_merges_cached_alive(app, tk, monkeypatch):
+    """Свежий список дополняется прошлыми живыми из кэша: их тоже перепроверяем."""
+    cached_url = u("cached", 443)
+    p = tmp_settings(app)
+    p.write_text(json.dumps({"last_results": {cached_url: True}}), encoding="utf-8")
     fresh = [(u("new", 443), "new", 443)]
     monkeypatch.setattr(g, "fetch_all", lambda urls: (fresh, 0, [], 0))
-    app.load()
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
     wait_done(app, tk)
-    assert app.proxies == fresh
-    assert app.status == {u("new", 443): None}
-    pump(tk, 200)  # refresh батчится на 100мс: дожидаемся финального текста
-    assert "Загружено 1" in app.label.cget("text")
+    assert {pr[0] for pr in app.proxies} == {cached_url, u("new", 443)}
+    assert all(app.status.values())
+    pump(tk, 200)
+    assert "Готово: живых 2 из 2" in app.label.cget("text")
 
 
-def test_load_custom_url_only(app, tk, monkeypatch):
+def test_load_and_check_cached_dead_not_merged(app, tk, monkeypatch):
+    """Мёртвые из кэша не добавляются к свежему списку: они своё отживали."""
+    p = tmp_settings(app)
+    p.write_text(json.dumps({"last_results": {u("dead", 443): False}}), encoding="utf-8")
+    fresh = [(u("new", 443), "new", 443)]
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fresh, 0, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    assert [pr[0] for pr in app.proxies] == [u("new", 443)]
+
+
+def test_load_and_check_custom_url_only(app, tk, monkeypatch):
     """Свой URL в настройках: fetch_all получает только его, не PRESETS."""
     got = {}
 
@@ -278,40 +313,46 @@ def test_load_custom_url_only(app, tk, monkeypatch):
 
     app.custom_url = "https://example.com/list.txt"
     monkeypatch.setattr(g, "fetch_all", fake_fetch)
-    app.load()
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
     wait_done(app, tk)
     assert got["urls"] == {"свой": "https://example.com/list.txt"}
 
 
-def test_load_empty_result_message(app, tk, monkeypatch):
+def test_load_and_check_empty_result_message(app, tk, monkeypatch):
     monkeypatch.setattr(g, "fetch_all", lambda urls: ([], 3, [("zakky8", "err")], 0))
-    app.load()
+    app.load_and_check()
     wait_done(app, tk)
-    pump(tk, 200)  # refresh батчится на 100мс: дожидаемся финального текста
+    pump(tk, 200)
     assert "пусты" in app.label.cget("text")
+    assert app.busy is False
 
 
-def test_load_network_error(app, tk, monkeypatch):
+def test_load_and_check_network_error(app, tk, monkeypatch):
     def boom(urls):
         raise RuntimeError("нет сети")
 
     monkeypatch.setattr(g, "fetch_all", boom)
-    app.load()
+    app.load_and_check()
     wait_done(app, tk)
     assert "Ошибка загрузки" in app.label.cget("text")
+    assert app.busy is False
 
 
-def test_load_bad_and_fail_counts_in_message(app, tk, monkeypatch):
+def test_load_and_check_counts_in_final_message(app, tk, monkeypatch):
+    """Счётчики загрузки (битые, упавшие источники, дубликаты) - в финальном тексте."""
     monkeypatch.setattr(
         g, "fetch_all",
         lambda urls: ([(u("h", 443), "h", 443)], 7, [("soli", "HTTP 500")], 2))
-    app.load()
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
     wait_done(app, tk)
-    pump(tk, 200)  # refresh батчится на 100мс: дожидаемся финального текста
+    pump(tk, 200)
     text = app.label.cget("text")
     assert "некорректных строк: 7" in text
     assert "soli: HTTP 500" in text
     assert "дубликатов отброшено: 2" in text
+    assert "Готово: живых 1 из 1" in text
 
 
 # ---------- _drain: очередь колбэков ----------
