@@ -74,9 +74,14 @@ ERROR_LOG = os.path.join(APP_DIR, "tgproxy_error.log")
 
 
 def _log_traceback():
-    """В windowed-exe stderr нет: traceback в файл рядом с программой."""
-    with open(ERROR_LOG, "a", encoding="utf-8") as f:
-        traceback.print_exc(file=f)
+    """В windowed-exe stderr нет: traceback в файл рядом с программой.
+    Лог не критичнее кэша: в read-only каталоге (Program Files) open() бросил бы
+    PermissionError и убил воркер до снятия busy."""
+    try:
+        with open(ERROR_LOG, "a", encoding="utf-8") as f:
+            traceback.print_exc(file=f)
+    except OSError:
+        pass
 
 
 def parse(line):
@@ -362,7 +367,7 @@ class App:
 
     def _load_and_check(self, src_url):
         try:
-            urls = {"свой": self.custom_url} if self.custom_url else PRESETS
+            urls = {"свой": src_url} if src_url else PRESETS
             try:
                 proxies, bad, fails, dups = fetch_all(urls)
             except Exception as e:

@@ -1188,3 +1188,49 @@ def test_fetched_url_uses_captured_source(app, tk, monkeypatch):
     app.load_and_check()
     wait_done(app, tk)
     assert len(fetches) == 1, "новый URL не скачался после смены"
+
+
+def test_worker_fetches_captured_source(app, tk, monkeypatch):
+    """Смена custom_url во время загрузки - качается СТАРЫЙ URL,
+    а не новый (метка и контент согласованы)."""
+    fetched = {}
+
+    def spy_fetch(urls):
+        fetched.update(urls)
+        import time as _t
+        _t.sleep(0.3)
+        return [(u("h", 443), "h", 443)], 0, [], 0
+
+    monkeypatch.setattr(g, "fetch_all", spy_fetch)
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.custom_url = "https://old.example/a.txt"
+    app.load_and_check()
+    app.custom_url = "https://new.example/b.txt"  # смена в главном потоке
+    wait_done(app, tk)
+    assert fetched == {"свой": "https://old.example/a.txt"}, "воркер скачал не захваченный источник"
+
+
+def test_log_traceback_swallows_permission_error(app, tmp_path, monkeypatch):
+    """read-only каталог не должен ронять логгер (busy замёрз бы)."""
+    monkeypatch.setattr(g, "ERROR_LOG", "Z:/nonexistent-ro-dir/err.log")
+    try:
+        g._log_traceback()  # PermissionError/OSError внутри - не должно вылететь
+    except OSError as e:
+        raise AssertionError(f"логгер не глотает OSError: {e}")
+
+
+def test_merge_cache_crash_caught_by_catchall(app, tk, monkeypatch):
+    """Catch-all в _load_and_check: неожиданный отказ в merge не морозит busy."""
+    monkeypatch.setattr(g, "fetch_all", lambda urls: ([(u("h", 443), "h", 443)], 0, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    # ломаем merge: valid вернёт True, а parse бросит (битый кэш-URL)
+    monkeypatch.setattr(g, "valid", lambda url: True)
+    monkeypatch.setattr(g, "parse", lambda line: (_ for _ in ()).throw(KeyError("secret")))
+    p = tmp_settings(app)
+    p.write_text(json.dumps({"last_results": {u("cached", 443): True}}), encoding="utf-8")
+    app.custom_url = "https://x.example/l.txt"
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert app.busy is False, "неожиданный отказ в merge не снял busy"
+    assert "прервана" in app.label.cget("text").lower()
