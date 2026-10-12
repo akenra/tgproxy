@@ -413,8 +413,14 @@ class App:
             # рефакторинга всех читателей ради 100мс-мигания
             self.proxies, self.status = merged, {u: None for u, _, _ in merged}
             self._fetched_url = src_url or ""  # источник, по которому реально качали
+            if fails:
+                # упавшие источники надо дотянуть: следующий клик должен качать заново,
+                # а не уходить в перепроверку скачанного (иначе недостижимы без правки настроек)
+                self._fetched_url = "<retry-needed>"
             total = len(self.proxies)
             self._load_prefix = f"Загружено {len(proxies)} прокси"
+            if fails:
+                self._load_prefix += " (нажмите ещё раз, чтобы повторить упавшие источники)"
             if dups:
                 self._load_prefix += f" (дубликатов отброшено: {dups}"
                 if bad:
@@ -654,3 +660,6 @@ if __name__ == "__main__":  # pragma: no cover - исполняется толь
     root = Tk()
     App(root)
     root.mainloop()
+    # воркеры alive() не-daemon: интерпретатор джойнит их до 8с после смерти окна,
+    # пользователь видит «приложение не закрылось». State уже сохранён под локом.
+    os._exit(0)

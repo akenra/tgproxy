@@ -1298,3 +1298,30 @@ def test_selection_follows_proxy_after_resort(app, tk, monkeypatch):
     new_idx = app.row_urls.index(urls[1])
     selected = app.listbox.curselection()
     assert selected and selected[0] == new_idx, "селект переехал на другого прокси"
+
+
+def test_failed_sources_allow_retry(app, tk, monkeypatch):
+    """При упавших источниках следующий клик качает заново,
+    а не уходит в перепроверку (иначе дотянуть упавшие нельзя)."""
+    calls = []
+    def fake_fetch(urls):
+        calls.append(list(urls))
+        if len(calls) == 1:
+            return [(u("h", 443), "h", 443)], 0, [("zakky8", "HTTP Error 503")], 0
+        return [(u("h", 443), "h", 443)], 0, [], 0
+    monkeypatch.setattr(g, "fetch_all", fake_fetch)
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert "повторить упавшие" in app.label.cget("text")
+    app.load_and_check()  # второй клик: должен снова качать, не перепроверять
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert len(calls) == 2, "упавшие источники не перезакачались повторным кликом"
+
+
+def test_process_exits_after_mainloop(monkeypatch):
+    """os._exit(0) после mainloop - не-daemon воркеры не держат процесс."""
+    src = open(g.__file__, encoding="utf-8").read()
+    assert "os._exit(0)" in src.split("if __name__")[1], "нет os._exit после mainloop"
