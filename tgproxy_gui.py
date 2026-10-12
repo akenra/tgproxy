@@ -6,7 +6,7 @@ import base64, json, os, queue, re, socket, sys, threading, time, traceback, web
 import concurrent.futures as cf
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import (Tk, Listbox, Button, Label, Toplevel, Entry, Frame, Text,
-                     BOTH, LEFT, RIGHT, W, END, SINGLE, DISABLED, NORMAL, NW)
+                     BOTH, LEFT, RIGHT, W, END, SINGLE, DISABLED, NORMAL)
 from tkinter import ttk, Scrollbar
 from urllib import request as rq, parse as ps
 
@@ -19,7 +19,6 @@ PRESETS = {
     "dubblebyte": "https://raw.githubusercontent.com/dubblebyte/free-mtproto-proxies/main/all_proxies.txt",
     "soli": "https://raw.githubusercontent.com/SoliSpirit/mtproto/master/all_proxies.txt",
 }
-DEFAULT_URL = PRESETS["zakky8"]
 TIMEOUT = 5
 OPTS = CheckOptions(connect_timeout=TIMEOUT, response_timeout=TIMEOUT)
 HELP = """ЧТО ДЕЛАЕТ ЭТА ПРОГРАММА
@@ -89,6 +88,13 @@ def parse(line):
     return (line.strip(), q["server"][0].rstrip("."), int(q["port"][0]))
 
 
+def _dedup_key(server, port, secret):
+    """Ключ дедупа прокси: hex-секрет регистронезависим, base64url - НЕТ
+    (AbC и aBc - разные байты, разные прокси): понижаем регистр только hex."""
+    s = secret.lower() if re.fullmatch(r"[0-9a-fA-F]+", secret) else secret
+    return (server.lower().rstrip("."), port, s)
+
+
 def valid(line):
     """Строка - прокси-ссылка ожидаемого формата (server+port+secret)."""
     try:
@@ -155,7 +161,7 @@ def fetch_all(urls):
                 bad += 1
                 continue
             p = parse(line)
-            key = (p[1].lower().rstrip("."), p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0].lower())
+            key = _dedup_key(p[1], p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0])
             if key in seen:
                 dups += 1
             else:
@@ -389,14 +395,14 @@ class App:
             # дедуп по тому же ключу, что в fetch_all: кэш может хранить другое написание
             # того же прокси (server=h. vs server=h)
             cached = load_settings().get("last_results", {})
-            seen = {(p[1].lower().rstrip("."), p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0].lower())
+            seen = {_dedup_key(p[1], p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0])
                     for p in proxies}
             merged = list(proxies)
             for url, ok in cached.items():
                 if ok and valid(url):
                     _, server, port = parse(url)
                     secret = ps.parse_qs(ps.urlparse(url).query)["secret"][0]
-                    ckey = (server.lower().rstrip("."), port, secret.lower())
+                    ckey = _dedup_key(server, port, secret)
                     if ckey not in seen:
                         seen.add(ckey)
                         merged.append((url, server, port))
@@ -464,9 +470,10 @@ class App:
                 except cf.CancelledError:
                     pass  # отменённые фьючерсы (BaseException с 3.8): штатный выход
         finally:
-            # без finally исключение в alive() оставило бы кнопки навсегда выключенными
-            if done == total:
-                save_last_results(self.status)  # кэш для приоритета в следующий раз
+            # без finally исключение в alive() оставило бы кнопки навсегда выключенными.
+            # кэш пишем всегда: None фильтруется в save_last_results, частичный прогон
+            # не теряет проверенных живых при следующем старте
+            save_last_results(self.status)
             self._after(0, self._busy_off)
             if done == total:
                 tail = f" {load_msg}" if load_msg else ""

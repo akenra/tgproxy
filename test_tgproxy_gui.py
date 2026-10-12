@@ -37,7 +37,9 @@ def app(tk, tmp_path, monkeypatch):
     соседние тесты модуля не живут; держим destroy-тесты на отдельных root."""
     import tgproxy_gui as _g
     monkeypatch.setattr(_g, "SETTINGS", str(tmp_path / "settings.json"))
-    return _g.App(tk)
+    a = _g.App(tk)
+    yield a
+    a._closing = True  # рвём _drain-цикл: не копим таймеры на общий module-scoped root
 
 
 def u(server, port, secret="a" * 32):
@@ -1253,3 +1255,18 @@ def test_snapshot_pair_assignment_atomic(app, tk, monkeypatch):
     wait_done(app, tk)
     assert app._snapshot[0] == app.proxies
     assert app._snapshot[1] == app.status
+
+
+def test_dedup_base64_secret_case_sensitive(app, tk, monkeypatch):
+    """Base64url-секреты регистрозависимы - AbC и aBc разные прокси,
+    дедуп не должен их схлопывать (hex - по-прежнему без учёта регистра)."""
+    b64_1 = "AbCdEfGhIjKl"          # 12 байт base64url
+    b64_2 = "aBcDeFgHiJkL"          # та же длина, другой регистр -> другой секрет
+    url1 = u("srv", 443).replace("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b64_1)
+    url2 = u("srv", 443).replace("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b64_2)
+    monkeypatch.setattr(g, "fetch_all", lambda urls: ([(url1, "srv", 443), (url2, "srv", 443)], 0, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert len(app.proxies) == 2, "base64url-секреты схлопнуты дедупом: живой потерян"
