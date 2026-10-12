@@ -104,6 +104,7 @@ def test_check_progress_not_animated(app, tk, monkeypatch):
     полоса скакала 0-100. В determinate-режиме анимация start() не должна идти."""
     app.proxies = [(u("h", 443), "h", 443)]
     app.status = {app.proxies[0][0]: None}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     monkeypatch.setattr(g, "alive", lambda url: True)
     app.load_and_check()
     assert str(app.progress.cget("mode")) == "determinate"
@@ -147,6 +148,7 @@ def test_check_updates_status_and_unblocks(app, tk, monkeypatch):
     n = 5
     app.proxies = [(u(f"h{i}", 443), f"h{i}", 443) for i in range(n)]
     app.status = {p[0]: None for p in app.proxies}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     # первый живой, остальные мёртвые; вместо сети - мгновенная заглушка
     monkeypatch.setattr(g, "alive", lambda url: "server=h0&" in url)
     app.load_and_check()
@@ -166,6 +168,7 @@ def test_check_alive_exception_still_unblocks(app, tk, monkeypatch):
     """Исключение в alive() не должно навсегда выключать кнопки."""
     app.proxies = [(u("h", 443), "h", 443)]
     app.status = {app.proxies[0][0]: None}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
 
     def boom(_):
         raise RuntimeError("сеть умерла")
@@ -603,6 +606,7 @@ def test_check_rerun_overwrites_old_status(app, tk, monkeypatch):
     """Повторное «Проверить» после завершения: статусы перезаписываются, busy снимается."""
     app.proxies = [(u("h", 443), "h", 443)]
     app.status = {app.proxies[0][0]: True}  # старый прогон
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     monkeypatch.setattr(g, "alive", lambda url: False)
     app.load_and_check()
     wait_done(app, tk)
@@ -728,6 +732,7 @@ def test_rerun_clears_stale_load_prefix(app, tk, monkeypatch):
     """Перепроверка без скачивания не показывает старый текст «Загружено N прокси»."""
     app.proxies = [(u("h", 443), "h", 443)]
     app.status = {u("h", 443): True}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     app._load_prefix = "Загружено 999 прокси [древняя ошибка]"  # остался от прошлого прогона
     monkeypatch.setattr(g, "alive", lambda url: True)
     app.load_and_check()
@@ -746,6 +751,7 @@ def test_rerun_branch_no_fetch(app, tk, monkeypatch):
 
     app.proxies = [(u("h", 443), "h", 443)]
     app.status = {u("h", 443): None}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее: сейчас перепроверка
     monkeypatch.setattr(g, "fetch_all", spy_fetch)
     monkeypatch.setattr(g, "alive", lambda url: True)
     app.load_and_check()
@@ -821,6 +827,7 @@ def test_rerun_status_no_leading_dot(app, tk, monkeypatch):
     """При перепроверке статус не начинается с лишней точки."""
     app.proxies = [(u("h", 443), "h", 443)]
     app.status = {u("h", 443): None}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     monkeypatch.setattr(g, "alive", lambda url: True)
     app.load_and_check()
     assert not app.label.cget("text").startswith(". ")
@@ -845,6 +852,7 @@ def test_check_saves_cache_with_list_url_intact(app, tk, monkeypatch):
     url = u("h", 443)
     app.proxies = [(url, "h", 443)]
     app.status = {url: None}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     monkeypatch.setattr(g, "alive", lambda x: True)
     app.load_and_check()
     wait_done(app, tk)
@@ -887,6 +895,7 @@ def test_executor_shutdown_on_close_mid_check(tmp_path, monkeypatch):
     app = g.App(root)
     app.proxies = [(u(f"h{i}", 443), f"h{i}", 443) for i in range(50)]
     app.status = {p[0]: None for p in app.proxies}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     monkeypatch.setattr(g, "alive", slow_alive)
     app.load_and_check()
     started.wait(2)  # хотя бы одна задача пошла
@@ -982,6 +991,7 @@ def test_check_iteration_survives_cancelled_error(app, tk, monkeypatch):
     url = u("h", 443)
     app.proxies = [(url, "h", 443)]
     app.status = {url: None}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     monkeypatch.setattr(g, "alive", lambda x: True)
     app.load_and_check()
     wait_done(app, tk)
@@ -1000,6 +1010,7 @@ def test_cancelled_error_branch_direct(app, tk, monkeypatch):
     urls = [u(f"h{i}", 443) for i in range(3)]  # zip тянет urls[1] -> next(results) -> CancelledError
     app.proxies = [(u, f"h{i}", 443) for i, u in enumerate(urls)]
     app.status = {u: None for u in urls}
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     monkeypatch.setattr(g, "alive", lambda x: True)
     # вызываем _check в главном потоке с фейковым executor'ом
     class FakeEx:
@@ -1138,3 +1149,19 @@ def test_refresh_skips_stale_selection_index(app):
     app._do_refresh()  # не должно бросить IndexError
     assert app.listbox.size() == 1
     assert app.listbox.curselection() in ((), (0,))
+
+
+def test_cached_restore_allows_refetch(app, tk, monkeypatch):
+    """После старта из кэша кнопка должна уметь качать свежих,
+    а не вечно перепроверять кэш (иначе при 0 живых пользователь заперт)."""
+    fetches = []
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fetches.append(urls) or ([(u("fresh", 443), "fresh", 443)], 0, [], 0)))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    # эмулируем _restore_cached: список есть, источник не фиксировался
+    app.proxies = [(u("cached", 443), "cached", 443)]
+    app.status = {u("cached", 443): True}
+    app._fetched_url = "<none>"  # так делает __init__/_restore_cached
+    app.custom_url = None    # дефолтная конфигурация
+    app.load_and_check()
+    wait_done(app, tk)
+    assert len(fetches) == 1, "после кэш-старта свежая загрузка недостижима"

@@ -212,7 +212,7 @@ class App:
         self.root = root
         self._q = queue.Queue()
         self.proxies = []       # [(url, server, port)]
-        self._fetched_url = None  # источник текущего списка (None = ещё не качали)
+        self._fetched_url = "<none>"  # ещё не качали: кнопка обязана скачать
         self.status = {}        # url -> True/False/None (None = не проверен)
         self.custom_url = load_settings().get("list_url")  # None = все предустановленные
         self.busy = False       # защита от двойных нажатий
@@ -346,7 +346,8 @@ class App:
         заработал бы только после перезапуска."""
         if self.busy:
             return
-        if self.proxies and self._fetched_url == self.custom_url:
+        fetched_now = self.custom_url or ""
+        if self.proxies and self._fetched_url == fetched_now and fetched_now != "<none>":
             self._load_prefix = ""  # перепроверка без скачивания: старый текст «Загружено N» устарел
             self._busy_on(indeterminate=False)
             self._run_check(len(self.proxies))
@@ -388,7 +389,7 @@ class App:
                         seen.add(ckey)
                         merged.append((url, server, port))
             self.proxies = merged
-            self._fetched_url = self.custom_url  # запомнить источник этого списка
+            self._fetched_url = self.custom_url or ""  # "" = скачали дефолтные источники
             self.status = {u: None for u, _, _ in self.proxies}
             total = len(self.proxies)
             self._load_prefix = f"Загружено {len(proxies)} прокси"
