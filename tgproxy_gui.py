@@ -174,15 +174,21 @@ def load_settings():
         return {}
 
 
+# один писатель settings-файла: и воркер проверки, и настройки GUI идут через него
+_settings_lock = threading.Lock()
+
+
 def save_last_results(status):
-    """Сохранить исход проверки: url -> True/False (None не храним)."""
-    try:
+    """Сохранить исход проверки: url -> True/False (None не храним).
+    Читаем файл под тем же локом, что и пишем: не теряем параллельные правки настроек."""
+    with _settings_lock:
         s = load_settings()
         s["last_results"] = {u: ok for u, ok in status.items() if ok is not None}
-        with open(SETTINGS, "w", encoding="utf-8") as f:
-            json.dump(s, f)
-    except OSError:
-        pass  # кэш приятная мелочь, не повод ронять приложение
+        try:
+            with open(SETTINGS, "w", encoding="utf-8") as f:
+                json.dump(s, f)
+        except OSError:
+            pass  # кэш приятная мелочь, не повод ронять приложение
 
 
 class App:
@@ -248,7 +254,8 @@ class App:
         rows.sort(key=lambda p: not cached[p[0]])
         self.proxies = rows
         self.status = {url: cached[url] for url, _, _ in rows}
-        self.refresh(f"Восстановлено из кэша прошлой проверки: {len(rows)} прокси, "
+        visible = [url for url, _, _ in rows if self.status[url] is not False]
+        self.refresh(f"Восстановлено из кэша прошлой проверки: прокси в списке {len(visible)}, "
                      f"живых {sum(1 for v in self.status.values() if v)}. "
                      f"Нажмите «1. Проверить прокси», чтобы перепроверить их")
 
@@ -311,6 +318,7 @@ class App:
         if self.busy:
             return
         if self.proxies:
+            self._load_prefix = ""  # перепроверка без скачивания: старый текст «Загружено N» устарел
             self._busy_on(indeterminate=False)
             self._run_check(len(self.proxies))
             return
@@ -511,9 +519,16 @@ class App:
                 self.set("URL должен начинаться с http:// или https:// (или пустое поле = все источники)")
                 return
             try:
-                with open(SETTINGS, "w", encoding="utf-8") as f:
-                    # пустой URL = сброс на предустановленные, храним пустой dict
-                    json.dump({"list_url": url} if url else {}, f)
+                # читаем актуальный файл под локом: не затираем кэш, который мог
+                # дописать воркер проверки между открытием окна и «Сохранить»
+                with _settings_lock:
+                    s = load_settings()
+                    # пустой URL = сброс на предустановленные, храним только list_url
+                    s["list_url"] = url
+                    if not url:
+                        s.pop("list_url")
+                    with open(SETTINGS, "w", encoding="utf-8") as f:
+                        json.dump(s, f)
             except OSError as e:
                 self.set(f"Не удалось сохранить настройки: {e}")
                 return

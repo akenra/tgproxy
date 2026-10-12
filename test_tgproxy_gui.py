@@ -31,11 +31,11 @@ def tk():
 
 
 @pytest.fixture()
-def app(tk, tmp_path):
-    """App с SETTINGS на временный файл: кэш-тесты не мусорят друг другу."""
+def app(tk, tmp_path, monkeypatch):
+    """App с SETTINGS на временный файл: кэш-тесты не мусорят друг другу.
+    monkeypatch сам восстановит значение после теста."""
     import tgproxy_gui as _g
-    saved = _g.SETTINGS
-    _g.SETTINGS = str(tmp_path / "settings.json")
+    monkeypatch.setattr(_g, "SETTINGS", str(tmp_path / "settings.json"))
     return _g.App(tk)
 
 
@@ -718,3 +718,86 @@ def test_check_zero_alive_suggests_refresh(app, tk, monkeypatch, tmp_path):
     text = app.label.cget("text")
     assert "Готово: живых 0" in text
     assert "источники устарели" in text
+
+
+# ---------- регрессии ----------
+
+def test_rerun_clears_stale_load_prefix(app, tk, monkeypatch):
+    """Перепроверка без скачивания не показывает старый текст «Загружено N прокси»."""
+    app.proxies = [(u("h", 443), "h", 443)]
+    app.status = {u("h", 443): True}
+    app._load_prefix = "Загружено 999 прокси [древняя ошибка]"  # остался от прошлого прогона
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert "Загружено 999" not in app.label.cget("text")
+
+
+def test_rerun_branch_no_fetch(app, tk, monkeypatch):
+    """Ветка перепроверки: список уже есть - fetch_all не зовётся вовсе."""
+    called = []
+
+    def spy_fetch(urls):
+        called.append(urls)
+        return [], 0, [], 0
+
+    app.proxies = [(u("h", 443), "h", 443)]
+    app.status = {u("h", 443): None}
+    monkeypatch.setattr(g, "fetch_all", spy_fetch)
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    assert called == []  # скачивания не было
+    assert app.status[u("h", 443)] is True
+
+
+def test_settings_save_keeps_cached_results(app, tk, monkeypatch):
+    """Запись настроек не затирает кэш результатов (single writer через lock)."""
+    p = tmp_settings(app)
+    g.save_last_results({u("h", 443): True})
+    # пользователь сохраняет URL, пока воркер писал кэш: кэш должен выжить
+    app.show_settings()
+    entry = app._settings_win.children["!entry"]
+    entry.delete(0, "end")
+    entry.insert(0, "https://example.com/list.txt")
+    click_button(app._settings_win, "Сохранить")
+    app._settings_win.destroy()
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    assert saved.get("list_url") == "https://example.com/list.txt"
+    assert saved.get("last_results") == {u("h", 443): True}
+
+
+def test_fixture_app_does_not_touch_real_settings(app):
+    """Во время теста с fixture app g.SETTINGS указывает на tmp, не на реальный файл."""
+    import tgproxy_gui as _g
+    assert _g.SETTINGS.endswith("settings.json")
+    assert "tgproxy" not in _g.SETTINGS or "pytest" in _g.SETTINGS or "temp" in _g.SETTINGS.lower()
+
+
+def test_startup_message_counts_only_visible(app, tk, monkeypatch):
+    """В сообщении старта из кэша считаются только видимые строки списка."""
+    p = tmp_settings(app)
+    url_live, url_dead = u("live", 443), u("gone", 443)
+    p.write_text(json.dumps({"last_results": {url_live: True, url_dead: False}}), encoding="utf-8")
+    app2 = g.App(new_root())
+    try:
+        pump(tk, 150)
+        text = app2.label.cget("text")
+        assert "в списке 1" in text  # только живой виден
+        assert "живых 1" in text
+    finally:
+        app2._on_close()
+
+
+def test_settings_save_empty_url_keeps_cache(app, tk, monkeypatch):
+    """Ветка s.pop("list_url") при пустом URL: кэш результатов сохраняется."""
+    p = tmp_settings(app)
+    g.save_last_results({u("h", 443): True})
+    app.show_settings()
+    click_button(app._settings_win, "Все предустановленные")
+    click_button(app._settings_win, "Сохранить")
+    app._settings_win.destroy()
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    assert "list_url" not in saved
+    assert saved.get("last_results") == {u("h", 443): True}
