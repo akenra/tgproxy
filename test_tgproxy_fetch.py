@@ -15,7 +15,7 @@ class FakeResponse:
     def __init__(self, text):
         self._text = text
 
-    def read(self):
+    def read(self, limit=-1):
         return self._text.encode("utf-8")
 
     def __enter__(self):
@@ -30,7 +30,7 @@ class FakeResponse_raw:
     def __init__(self, data):
         self._data = data
 
-    def read(self):
+    def read(self, limit=-1):
         return self._data
 
     def __enter__(self):

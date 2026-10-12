@@ -112,7 +112,7 @@ def _fetch_text(text):
     from unittest.mock import patch
 
     class R:
-        def read(self):
+        def read(self, limit=-1):
             return text.encode("utf-8")
 
         def __enter__(self):
