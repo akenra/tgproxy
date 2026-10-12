@@ -1325,3 +1325,38 @@ def test_process_exits_after_mainloop(monkeypatch):
     """os._exit(0) после mainloop - не-daemon воркеры не держат процесс."""
     src = open(g.__file__, encoding="utf-8").read()
     assert "os._exit(0)" in src.split("if __name__")[1], "нет os._exit после mainloop"
+
+
+def test_zero_alive_next_click_refetches(app, tk, monkeypatch):
+    """0 живых из N - следующий клик перекачивает источники,
+    а не вечно перепроверяет мёртвый список."""
+    calls = []
+    def fake_fetch(urls):
+        calls.append(list(urls))
+        return [(u(f"s{i}", 443), f"s{i}", 443) for i in range(3)], 0, [], 0
+    monkeypatch.setattr(g, "fetch_all", fake_fetch)
+    monkeypatch.setattr(g, "alive", lambda url: False)  # всё мертво
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert "живых 0" in app.label.cget("text")
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert len(calls) == 2, "0 живых: клик не перекачал источники (ушёл в перепроверку)"
+
+
+def test_drain_survives_close_mid_tick(app, tk, monkeypatch):
+    """TclError/RuntimeError в reschedule _drain не пишет трейсбек."""
+    calls = []
+    def boom_after(ms, fn, *a):
+        calls.append(fn.__name__)
+        if fn.__name__ == "_drain":
+            raise RuntimeError("invalid command name")  # Tcl мёртв
+        raise RuntimeError("only drain dies")
+    monkeypatch.setattr(app.root, "after", boom_after)
+    app._q.put((0, lambda: None, ()))
+    try:
+        app._drain()
+    except RuntimeError as e:
+        raise AssertionError(f"reschedule не защищён: {e}")

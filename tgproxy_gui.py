@@ -329,7 +329,10 @@ class App:
         except queue.Empty:
             pass
         finally:
-            self.root.after(25, self._drain)
+            try:
+                self.root.after(25, self._drain)
+            except RuntimeError:
+                pass  # окно закрыли посреди тика: Tcl мёртв, reschedule не нужен
 
     def _busy_on(self, indeterminate=True):
         """Защита от дурака: пока фоновая работа идёт, кнопки выключены.
@@ -486,6 +489,9 @@ class App:
             if done == total:
                 tail = f" {load_msg}" if load_msg else ""
                 if alive_n == 0 and total > 0:
+                    # как и для упавших источников: иначе клик уйдёт в вечную
+                    # перепроверку мёртвого списка, а свежие прокси недостижимы
+                    self._fetched_url = "<retry-needed>"
                     self._after(0, self.refresh,
                                 f"Готово: живых 0 из {total}.{tail} Возможно, все источники устарели - "
                                 f"попробуйте позже или свой URL в настройках")
