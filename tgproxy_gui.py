@@ -2,7 +2,7 @@
 # tgproxy_gui.py: качает список MTProto-прокси, проверяет полным хендшейком,
 # копирует живых в буфер и открывает первого через tg:// (Telegram добавит сам).
 # Кроссплатформенно: tkinter + webbrowser, единственная зависимость - mtproxy-checker.
-import base64, json, os, queue, re, sys, threading, time, traceback, webbrowser
+import base64, json, os, queue, re, socket, sys, threading, time, traceback, webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import (Tk, Listbox, Button, Label, Toplevel, Entry, Frame,
                      BOTH, LEFT, RIGHT, W, END, SINGLE, DISABLED, NORMAL, NW)
@@ -109,7 +109,16 @@ def valid(line):
 
 
 def alive(url):
-    """Живой = прошёл полный MTProto-хендшейк (TCP + secret + ответ Telegram)."""
+    """Живой = прошёл полный MTProto-хендшейк (TCP + secret + ответ Telegram).
+    Двухфазно: сначала дешёвый TCP-коннект (2.5с), полный хендшейк только у открывших:
+    мёртвый по сети хост перестаёт съедать полные 5с response-таймаута."""
+    try:
+        q = ps.parse_qs(ps.urlsplit(url).query)
+        host, port = q["server"][0], int(q["port"][0])
+        with socket.create_connection((host, port), timeout=2.5):
+            pass
+    except Exception:
+        return False  # TCP не открылся - хендшейк заведомо не пройдёт
     try:
         return check_proxy(url, OPTS).ok
     except Exception:
@@ -150,9 +159,29 @@ def load_settings():
     try:
         with open(SETTINGS, encoding="utf-8") as f:
             s = json.load(f)
-        return s if isinstance(s, dict) and isinstance(s.get("list_url"), str) else {}  # защита от рукatenого JSON
+        if not isinstance(s, dict):
+            return {}
+        out = {}
+        if isinstance(s.get("list_url"), str):
+            out["list_url"] = s["list_url"]
+        # кэш результатов прошлой проверки: url -> ok (для приоритета живых при повторе)
+        if isinstance(s.get("last_results"), dict):
+            out["last_results"] = {k: bool(v) for k, v in s["last_results"].items()
+                                   if isinstance(k, str) and isinstance(v, bool)}
+        return out
     except Exception:
         return {}
+
+
+def save_last_results(status):
+    """Сохранить исход проверки: url -> True/False (None не храним)."""
+    try:
+        s = load_settings()
+        s["last_results"] = {u: ok for u, ok in status.items() if ok is not None}
+        with open(SETTINGS, "w", encoding="utf-8") as f:
+            json.dump(s, f)
+    except OSError:
+        pass  # кэш приятная мелочь, не повод ронять приложение
 
 
 class App:
@@ -301,11 +330,14 @@ class App:
         threading.Thread(target=self._check, daemon=True).start()
 
     def _check(self):
+        # прошлые живые проверяем первыми: пользователь скорее всего ждёт их
+        last = load_settings().get("last_results", {})
         urls = [u for u, _, _ in self.proxies]
+        urls.sort(key=lambda u: not last.get(u, False))
         total = len(urls)
         done = alive_n = 0
         try:
-            with ThreadPoolExecutor(32) as ex:
+            with ThreadPoolExecutor(128) as ex:
                 for url, ok in zip(urls, ex.map(alive, urls)):
                     self.status[url] = ok
                     done += 1
@@ -315,6 +347,8 @@ class App:
                                     f"Проверено {done}/{total}, живых {alive_n}")
         finally:
             # без finally исключение в alive() оставило бы кнопки навсегда выключенными
+            if done == total:
+                save_last_results(self.status)  # кэш для приоритета в следующий раз
             self._after(0, self._busy_off)
             if done == total:
                 self._after(0, self.refresh, f"Готово: живых {alive_n} из {total}. Теперь «3. Включить»")
@@ -355,7 +389,7 @@ class App:
                  f"в появившемся диалоге. Весь список уже в буфере.")
 
     def refresh(self, text):
-        # батчинг: не чаще раза в 100мс, иначе при 32 потоках мельтешит
+        # батчинг: не чаще раза в 100мс, иначе при 128 потоках список часто мигает
         now = time.monotonic()
         self._pending_text = text
         if getattr(self, "_refresh_pending", False):

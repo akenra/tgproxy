@@ -95,13 +95,14 @@ def test_fetch_all_invalid_utf8_replaced(monkeypatch):
     assert [(s, p) for _, s, p in proxies] == [("h1", 443)]
 
 
-# ---------- alive: хендшейк ----------
+# ---------- alive: двухфазная проверка ----------
 
 def test_alive_true(monkeypatch):
     class R:
         ok = True
 
     monkeypatch.setattr(g, "check_proxy", lambda url, opts: R())
+    monkeypatch.setattr(g.socket, "create_connection", lambda addr, timeout: _NoopSock())
     assert g.alive("https://t.me/proxy?server=x&port=443&secret=" + HEX32) is True
 
 
@@ -110,6 +111,7 @@ def test_alive_false_on_check_fail(monkeypatch):
         ok = False
 
     monkeypatch.setattr(g, "check_proxy", lambda url, opts: R())
+    monkeypatch.setattr(g.socket, "create_connection", lambda addr, timeout: _NoopSock())
     assert g.alive("https://t.me/proxy?server=x&port=443&secret=" + HEX32) is False
 
 
@@ -118,11 +120,38 @@ def test_alive_false_on_exception(monkeypatch):
         raise RuntimeError("таймаут")
 
     monkeypatch.setattr(g, "check_proxy", boom)
+    monkeypatch.setattr(g.socket, "create_connection", lambda addr, timeout: _NoopSock())
     assert g.alive("https://t.me/proxy?server=x&port=443&secret=" + HEX32) is False
 
 
+def test_alive_tcp_fail_skips_handshake(monkeypatch):
+    """Фаза 1: TCP не открылся - check_proxy не зовётся вовсе (экономия 5с на мёртвом)."""
+    def no_connect(addr, timeout):
+        raise OSError("недоступен")
+
+    called = []
+    monkeypatch.setattr(g, "check_proxy", lambda url, opts: called.append(url))
+    monkeypatch.setattr(g.socket, "create_connection", no_connect)
+    assert g.alive("https://t.me/proxy?server=x&port=443&secret=" + HEX32) is False
+    assert called == []  # хендшейк пропущен
+
+
+def test_alive_tcp_timeout_value(monkeypatch):
+    """Фаза 1 использует короткий таймаут 2.5с, а не глобальные OPTS."""
+    seen = {}
+
+    def spy_connect(addr, timeout):
+        seen["addr"], seen["timeout"] = addr, timeout
+        raise OSError("всё равно падаем")
+
+    monkeypatch.setattr(g.socket, "create_connection", spy_connect)
+    g.alive(u("h", 443))
+    assert seen["addr"] == ("h", 443)
+    assert seen["timeout"] == 2.5
+
+
 def test_alive_passes_connect_opts(monkeypatch):
-    """alive() передаёт глобальные OPTS (connect/response timeout)."""
+    """Фаза 2 передаёт глобальные OPTS (connect/response timeout)."""
     got = {}
 
     def spy(url, opts):
@@ -134,5 +163,16 @@ def test_alive_passes_connect_opts(monkeypatch):
         return R()
 
     monkeypatch.setattr(g, "check_proxy", spy)
+    monkeypatch.setattr(g.socket, "create_connection", lambda addr, timeout: _NoopSock())
     g.alive(u("x", 443))
     assert got["opts"] is g.OPTS
+
+
+class _NoopSock:
+    """Заглушка TCP-сокета для with-блока."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False

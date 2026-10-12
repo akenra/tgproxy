@@ -572,3 +572,12 @@ def test_load_settings_non_str_value(tmp_path, monkeypatch):
 
 def test_selftest_smoke():
     g.selftest()  # встроенные assert'ы не должны расходиться с pytest-пакетом
+
+
+def test_save_last_results_oserror_swallowed(monkeypatch):
+    """Ошибка записи кэша результатов не роняет проверку (Tg-proxy кэш не критичен)."""
+    def boom(path, *a, **kw):
+        raise OSError("диск переполнен")
+
+    monkeypatch.setattr("builtins.open", boom)
+    g.save_last_results({"x": True})  # не должно бросить
