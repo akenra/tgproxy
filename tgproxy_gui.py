@@ -134,7 +134,8 @@ def fetch_all(urls):
     for name, url in urls.items():
         try:
             with rq.urlopen(url, timeout=30) as r:
-                raw = r.read()
+                raw = r.read(5 * 1024 * 1024)  # потолок 5МБ: список в 50к строк не нужен,
+                # а чужой URL не утянет гигабайты в память
             try:
                 text = raw.decode("utf-8-sig")
             except UnicodeDecodeError:
@@ -397,6 +398,9 @@ class App:
         p = getattr(self, "_load_prefix", "")
         pre = f"{p}. " if p else ""
         self.set(f"{pre}Проверка (полный MTProto-хендшейк)...")
+        # executor живёт в главном потоке: присвоение self._ex до старта воркера,
+        # иначе _on_close в окне между стартом потока и присвоением промахнётся
+        self._ex = ThreadPoolExecutor(128)
         threading.Thread(target=self._check, daemon=True).start()
 
     def _check(self):
@@ -408,15 +412,20 @@ class App:
         done = alive_n = 0
         load_msg = getattr(self, "_load_prefix", "")  # счётчики загрузки из load_and_check
         try:
-            with ThreadPoolExecutor(128) as ex:
-                self._ex = ex  # для shutdown(cancel_futures) при закрытии окна
-                for url, ok in zip(urls, ex.map(alive, urls)):
-                    self.status[url] = ok
-                    done += 1
-                    alive_n += ok
-                    self._after(0, lambda v=done: self.progress.config(value=v))
-                    self._after(0, self.refresh,
-                                    f"{load_msg}{' ' if load_msg else ''}Проверено {done}/{total}, живых {alive_n}")
+            with self._ex:
+                # Python 3.14: map сабмитит лениво - если окно закрыли и executor
+                # уже shutdown, итерация бросит RuntimeError; это штатный выход
+                try:
+                    results = self._ex.map(alive, urls)
+                    for url, ok in zip(urls, results):
+                        self.status[url] = ok
+                        done += 1
+                        alive_n += ok
+                        self._after(0, lambda v=done: self.progress.config(value=v))
+                        self._after(0, self.refresh,
+                                        f"{load_msg}{' ' if load_msg else ''}Проверено {done}/{total}, живых {alive_n}")
+                except RuntimeError:
+                    pass  # executor выключен закрытием окна: выходим через finally
         finally:
             # без finally исключение в alive() оставило бы кнопки навсегда выключенными
             if done == total:
@@ -482,14 +491,15 @@ class App:
         text = getattr(self, "_pending_text", "")
         self.listbox.delete(0, END)
         # показываем только живых и ещё непроверенных: мёртвые - визуальный шум,
-        # воскресший (False -> True при перепроверке) снова появляется сам
-        rows = [p for p in self.proxies
-                if self.status.get(p[0]) is not False]
-        rows.sort(key=lambda p: {True: 0, None: 1}[self.status.get(p[0])])
-        self.row_urls = [p[0] for p in rows]
-        for url, server, port in rows:
-            st = self.status.get(url)
-            mark = {True: "[живой] ", None: "[ ?    ] "}[st]
+        # воскресший (False -> True при перепроверке) снова появляется сам.
+        # статус берём один раз на элемент: воркер может сменить его между
+        # фильтром и сортировкой, повторные get дадут рассинхрон (KeyError)
+        rows = [(p, self.status.get(p[0])) for p in self.proxies]
+        rows = [(p, st) for p, st in rows if st is not False]
+        rows.sort(key=lambda t: 0 if t[1] else 1)
+        self.row_urls = [p[0] for p, _ in rows]
+        for (url, server, port), st in rows:
+            mark = "[живой] " if st else "[ ?    ] "
             self.listbox.insert(END, f"{mark}{server}:{port}")
             if st:
                 self.listbox.itemconfig(END, fg="#1a7f37")

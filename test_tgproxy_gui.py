@@ -893,3 +893,45 @@ def test_executor_shutdown_on_close_mid_check(tmp_path, monkeypatch):
     release.set()
     # executor выключен: очередь задач отменена, невыполненные не гоняются
     assert app._ex._shutdown, "executor не выключен при закрытии окна"
+
+
+def test_do_refresh_tolerates_status_race(app, tk, monkeypatch):
+    """Статус сменился None->False между фильтром и сортировкой - не KeyError.
+    Регрессия: sort-ключ {True:0, None:1}[st] падал на False."""
+    url = u("h", 443)
+    app.proxies = [(url, "h", 443)]
+    app.status = {url: True}
+    app._pending_text = "тест"
+    # эмулируем гонку: каждый второй get после фильтра видит False вместо None/True
+    class RacingDict(dict):
+        """Эмулирует воркер: после первого get всем статусам присваивается False.
+        Старый код делал повторные get (фильтр, потом sort-key, потом mark) и падал
+        KeyError на {True:0, None:1}[False]; снапшот-версия делает один get на элемент."""
+        def __init__(self, base):
+            super().__init__(base)
+            self.flipped = False
+
+        def get(self, key, default=None):
+            st = super().get(key, default)
+            if not self.flipped:
+                self.flipped = True
+                for k in self:
+                    super().__setitem__(k, False)  # "воркер успел" для всех последующих get
+            return st
+
+    app.status = RacingDict(app.status)
+    app._do_refresh()  # не должно бросить KeyError
+    # снапшот взял статусы до флипа: строка осталась, пометка по старому (живому) статусу
+    assert app.listbox.size() == 1  # не упало; элемент обработан по snapshot-статусу
+
+
+def test_executor_created_in_main_thread(app, tk, monkeypatch):
+    """executor создаётся до старта потока - закрытие окна в любом
+    интервале гарантированно его выключает."""
+    fresh = [(u("h", 443), "h", 443)]
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fresh, 0, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()  # fetch уходит в поток, _ex ещё нет
+    assert getattr(app, "_ex", None) is None or app._ex._shutdown is False
+    wait_done(app, tk)
+    assert app._ex._shutdown is True  # with-блок закрыл
