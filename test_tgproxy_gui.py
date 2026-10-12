@@ -1058,3 +1058,26 @@ def test_load_prefix_counts_bad_only(app, tk, monkeypatch):
     pump(tk, 200)
     assert "некорректных строк: 5" in app.label.cget("text")
     assert "дубликатов" not in app.label.cget("text")
+
+
+
+def test_refresh_pending_not_stuck_when_after_fails(app, tk, monkeypatch, tmp_path):
+    """MED: root.after в _drain бросил (окно умирает) - _refresh_pending сбрасывается,
+    refresh() не замирает навсегда."""
+    monkeypatch.setattr(g, "ERROR_LOG", str(tmp_path / "err.log"))
+    real_after = app.root.after
+    calls = {"n": 0}
+
+    def failing_after(ms, fn, *a):
+        if fn == app._do_refresh:
+            calls["n"] += 1
+            raise RuntimeError(" Tcl: application has been destroyed")
+        return real_after(ms, fn, *a)
+
+    app.root.after = failing_after
+    app.refresh("текст 1")            # план _do_refresh уйдёт в очередь
+    pump(tk, 150)                      # _drain попытается after() -> RuntimeError -> лог
+    assert calls["n"] == 1
+    assert app._refresh_pending is False, "флаг залип: refresh замер навсегда"
+    app.refresh("текст 2")            # должен снова спланироваться, не выйти по early-return
+    assert app._pending_text == "текст 2"

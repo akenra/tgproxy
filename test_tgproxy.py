@@ -144,3 +144,14 @@ def test_bad_lines_counted():
     text = u("h1", 443, HEX32) + "\ngarbage\n" + u("h1", 443, HEX32)
     out, bad = _fetch_text(text)
     assert len(out) == 1 and bad == 1  # garbage; дубликат не в счёт bad, он отфильтрован как seen
+
+
+def test_dedup_case_insensitive(monkeypatch):
+    """Хост и hex-секрет регистронезависимы: A.example vs a.example - один прокси."""
+    from test_tgproxy_fetch import FakeResponse
+    url1 = "https://t.me/proxy?server=A.example&port=443&secret=" + "A" * 32
+    url2 = "https://t.me/proxy?server=a.example&port=443&secret=" + "a" * 32
+    monkeypatch.setattr(g.rq, "urlopen", lambda req, timeout: FakeResponse(url1 + chr(10) + url2))
+    proxies, bad, fails, dups = g.fetch_all({"src": "http://x/"})
+    assert len(proxies) == 1
+    assert dups == 1

@@ -134,7 +134,8 @@ def fetch_all(urls):
     seen = set()
     for name, url in urls.items():
         try:
-            with rq.urlopen(url, timeout=30) as r:
+            with rq.urlopen(rq.Request(url, headers={"User-Agent": "tgproxy/1.0"}),
+                            timeout=30) as r:
                 raw = r.read(5 * 1024 * 1024)  # потолок 5МБ: список в 50к строк не нужен,
                 # а чужой URL не утянет гигабайты в память
             try:
@@ -149,7 +150,7 @@ def fetch_all(urls):
                 bad += 1
                 continue
             p = parse(line)
-            key = (p[1], p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0])
+            key = (p[1].lower().rstrip("."), p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0].lower())
             if key in seen:
                 dups += 1
             else:
@@ -304,6 +305,10 @@ class App:
                 try:
                     self.root.after(ms, fn, *args)
                 except Exception:
+                    # колбэк потерян: батчинг-флаг (например _refresh_pending у
+                    # _do_refresh) надо сбросить, иначе refresh() замрёт навсегда
+                    if fn == self._do_refresh:
+                        self._refresh_pending = False
                     _log_traceback()  # в windowed-сборке терять колбэк молча нельзя
         except queue.Empty:
             pass
@@ -368,15 +373,16 @@ class App:
             # дедуп по тому же ключу, что в fetch_all: кэш может хранить другое написание
             # того же прокси (server=h. vs server=h)
             cached = load_settings().get("last_results", {})
-            seen = {(p[1], p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0])
+            seen = {(p[1].lower().rstrip("."), p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0].lower())
                     for p in proxies}
             merged = list(proxies)
             for url, ok in cached.items():
                 if ok and valid(url):
                     _, server, port = parse(url)
                     secret = ps.parse_qs(ps.urlparse(url).query)["secret"][0]
-                    if (server, port, secret) not in seen:
-                        seen.add((server, port, secret))
+                    ckey = (server.lower().rstrip("."), port, secret.lower())
+                    if ckey not in seen:
+                        seen.add(ckey)
                         merged.append((url, server, port))
             self.proxies = merged
             self.status = {u: None for u, _, _ in self.proxies}

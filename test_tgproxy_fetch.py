@@ -47,7 +47,8 @@ def test_fetch_all_dedup_bad_and_fail(monkeypatch):
     text = "\n".join([u("h1", 443), u("h1", 443), "garbage", u("h2", 8443)])
     seen_urls = []
 
-    def fake_urlopen(url, timeout):
+    def fake_urlopen(req, timeout):
+        url = getattr(req, "full_url", req)
         seen_urls.append(url)
         if "zakky8" in url:
             return FakeResponse(text)
@@ -65,8 +66,8 @@ def test_fetch_all_dedup_bad_and_fail(monkeypatch):
 
 def test_fetch_all_bom_and_empty(monkeypatch):
     """BOM в начале файла срезается; полностью пустой ответ даёт пустой список."""
-    def fake_urlopen(url, timeout):
-        return FakeResponse("\ufeff" + u("h1", 443) if "zakky8" in url else "")
+    def fake_urlopen(req, timeout):
+        return FakeResponse("\ufeff" + u("h1", 443) if "zakky8" in getattr(req, "full_url", req) else "")
 
     monkeypatch.setattr(g.rq, "urlopen", fake_urlopen)
     proxies, bad, fails, dups = g.fetch_all(g.PRESETS)
@@ -76,7 +77,7 @@ def test_fetch_all_bom_and_empty(monkeypatch):
 
 def test_fetch_all_server_dot_normalization(monkeypatch):
     """server с точкой на конце и без: дедуп по нормализованному хосту."""
-    def fake_urlopen(url, timeout):
+    def fake_urlopen(req, timeout):
         return FakeResponse(u("host.name.", 443) + "\n" + u("host.name", 443))
 
     monkeypatch.setattr(g.rq, "urlopen", fake_urlopen)
@@ -86,7 +87,7 @@ def test_fetch_all_server_dot_normalization(monkeypatch):
 
 def test_fetch_all_invalid_utf8_replaced(monkeypatch):
     """Битый UTF-8 в ответе источника не валит источник: строки декодируются с replace."""
-    def fake_urlopen(url, timeout):
+    def fake_urlopen(req, timeout):
         return FakeResponse_raw(b"\xff\xfe " + u("h1", 443).encode("utf-8"))
 
     monkeypatch.setattr(g.rq, "urlopen", fake_urlopen)
