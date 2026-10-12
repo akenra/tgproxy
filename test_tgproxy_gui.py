@@ -823,3 +823,44 @@ def test_rerun_status_no_leading_dot(app, tk, monkeypatch):
     monkeypatch.setattr(g, "alive", lambda url: True)
     app.load_and_check()
     assert not app.label.cget("text").startswith(". ")
+
+
+# ---------- регрессии ----------
+
+def test_settings_write_atomic_no_lost_list_url(app, tk, monkeypatch):
+    """Прерванная запись не оставляет обрезанный файл; list_url переживает кэш-запись."""
+    p = tmp_settings(app)
+    p.write_text(json.dumps({"list_url": "https://example.com/l.txt"}), encoding="utf-8")
+    g.save_last_results({u("h", 443): True})
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    assert saved["list_url"] == "https://example.com/l.txt"  # не потерян
+    assert saved["last_results"] == {u("h", 443): True}
+
+
+def test_check_saves_cache_with_list_url_intact(app, tk, monkeypatch):
+    """После успешного прогона в settings есть last_results, list_url цел."""
+    p = tmp_settings(app)
+    p.write_text(json.dumps({"list_url": "https://example.com/l.txt"}), encoding="utf-8")
+    url = u("h", 443)
+    app.proxies = [(url, "h", 443)]
+    app.status = {url: None}
+    monkeypatch.setattr(g, "alive", lambda x: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    assert saved["last_results"] == {url: True}
+    assert saved["list_url"] == "https://example.com/l.txt"
+
+
+def test_merge_cache_dedups_same_proxy_different_spelling(app, tk, monkeypatch):
+    """Кэш и свежий список с одинаковым прокси в разном написании server - не дублируются."""
+    url_fresh = u("h", 443)                       # server=h
+    url_cached = u("h.", 443)                     # server=h. - то же самое с точкой
+    p = tmp_settings(app)
+    p.write_text(json.dumps({"last_results": {url_cached: True}}), encoding="utf-8")
+    fresh = [(url_fresh, "h", 443)]
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fresh, 0, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    assert [pr[0] for pr in app.proxies] == [url_fresh]  # дубль не добавлен

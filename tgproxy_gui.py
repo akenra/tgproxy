@@ -157,6 +157,12 @@ def fetch_all(urls):
 
 
 def load_settings():
+    # чтение под тем же локом, что запись: воркер не увидит усечённый файл
+    with _settings_lock:
+        return _load_settings_unlocked()
+
+
+def _load_settings_unlocked():
     try:
         with open(SETTINGS, encoding="utf-8") as f:
             s = json.load(f)
@@ -178,15 +184,22 @@ def load_settings():
 _settings_lock = threading.Lock()
 
 
+def _write_settings(data):
+    """Атомарная запись: temp-файл + os.replace, обрыв не оставит обрезанный JSON."""
+    tmp = SETTINGS + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, SETTINGS)
+
+
 def save_last_results(status):
     """Сохранить исход проверки: url -> True/False (None не храним).
     Читаем файл под тем же локом, что и пишем: не теряем параллельные правки настроек."""
     with _settings_lock:
-        s = load_settings()
+        s = _load_settings_unlocked()
         s["last_results"] = {u: ok for u, ok in status.items() if ok is not None}
         try:
-            with open(SETTINGS, "w", encoding="utf-8") as f:
-                json.dump(s, f)
+            _write_settings(s)
         except OSError:
             pass  # кэш приятная мелочь, не повод ронять приложение
 
@@ -344,13 +357,20 @@ class App:
             self._after(0, self.refresh,
                         "Списки пусты или в неправильном формате - проверьте интернет и URL в настройках")
             return
-        # прошлые живые из кэша доливаем к свежим и перепроверяем: могли ожить/умереть
+        # прошлые живые из кэша доливаем к свежим и перепроверяем: могли ожить/умереть.
+        # дедуп по тому же ключу, что в fetch_all: кэш может хранить другое написание
+        # того же прокси (server=h. vs server=h)
         cached = load_settings().get("last_results", {})
-        fresh_urls = {p[0] for p in proxies}
+        seen = {(p[1], p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0])
+                for p in proxies}
         merged = list(proxies)
         for url, ok in cached.items():
-            if ok and url not in fresh_urls and valid(url):
-                merged.append((url, *parse(url)[1:]))
+            if ok and valid(url):
+                _, server, port = parse(url)
+                secret = ps.parse_qs(ps.urlparse(url).query)["secret"][0]
+                if (server, port, secret) not in seen:
+                    seen.add((server, port, secret))
+                    merged.append((url, server, port))
         self.proxies = merged
         self.status = {u: None for u, _, _ in self.proxies}
         total = len(self.proxies)
@@ -528,13 +548,12 @@ class App:
                 # читаем актуальный файл под локом: не затираем кэш, который мог
                 # дописать воркер проверки между открытием окна и «Сохранить»
                 with _settings_lock:
-                    s = load_settings()
+                    s = _load_settings_unlocked()
                     # пустой URL = сброс на предустановленные, храним только list_url
                     s["list_url"] = url
                     if not url:
                         s.pop("list_url")
-                    with open(SETTINGS, "w", encoding="utf-8") as f:
-                        json.dump(s, f)
+                    _write_settings(s)
             except OSError as e:
                 self.set(f"Не удалось сохранить настройки: {e}")
                 return
