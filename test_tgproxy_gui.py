@@ -1100,5 +1100,41 @@ def test_settings_url_change_forces_refetch(app, tk, monkeypatch, tmp_path):
 
 
 def test_busy_blocks_buttons_is_isolated(app, tk, monkeypatch):
-    """Тест busy-кнопок не ходит в сеть - alive замокан."""
-    # (фикс в самом тесте: см. ниже monkeypatch)
+    """busy-тест не ходит в сеть - живой прогон замокан целиком."""
+    fetches = []
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fetches.append(urls) or ([(u("h", 443), "h", 443)], 0, [], 0)))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()  # по пустому списку: полный flow на моках
+    wait_done(app, tk)
+    pump(tk, 200)
+    assert app.busy is False
+    assert len(fetches) == 1  # сеть не тронута: fetch только мок
+
+
+def test_load_prefix_dups_only(app, tk, monkeypatch):
+    """Ветка dups>0, bad==0: префикс без «некорректных строк»."""
+    fresh = [(u("h", 443), "h", 443)]
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fresh, 0, [], 2))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    text = app.label.cget("text")
+    assert "дубликатов отброшено: 2" in text
+    assert "некорректных" not in text
+
+
+def test_refresh_skips_stale_selection_index(app):
+    """Ветка old_idx >= len(row_urls): выделение за пределами сжавшегося списка."""
+    urls = [u("h0", 443), u("h1", 443)]
+    app.proxies = [(x, f"h{i}", 443) for i, x in enumerate(urls)]
+    app.status = {x: None for x in urls}
+    app.refresh("")
+    app._do_refresh()
+    app.listbox.selection_set(1)
+    # после проверки h1 умер: список сжался до 1 строки, старый индекс 1 стал невалиден
+    app.status[urls[1]] = False
+    app.refresh("")
+    app._do_refresh()  # не должно бросить IndexError
+    assert app.listbox.size() == 1
+    assert app.listbox.curselection() in ((), (0,))
