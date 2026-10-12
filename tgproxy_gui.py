@@ -286,9 +286,13 @@ class App:
                      f"Нажмите «1. Проверить прокси», чтобы перепроверить их")
 
     def _tk_error(self, exc_type, exc_value, tb):
-        # исключение в Tk-колбэке (windowed-exe без stderr): в файл, не молча
-        with open(ERROR_LOG, "a", encoding="utf-8") as f:
-            traceback.print_exception(exc_type, exc_value, tb, file=f)
+        # исключение в Tk-колбэке (windowed-exe без stderr): в файл, не молча.
+        # логгер не критичнее обрабатываемой ошибки: read-only каталог не каскадит
+        try:
+            with open(ERROR_LOG, "a", encoding="utf-8") as f:
+                traceback.print_exception(exc_type, exc_value, tb, file=f)
+        except OSError:
+            pass
 
     def set(self, text):
         self.label.config(text=text)
@@ -396,9 +400,10 @@ class App:
                     if ckey not in seen:
                         seen.add(ckey)
                         merged.append((url, server, port))
-            # одна пара присваиваний: главный поток между ними увидит новый список
-            # со старым статусом (строки подпрыгнут с ложным [ ? ])
-            self.proxies, self.status = merged, {u: None for u, _, _ in merged}
+            # снапшот одним кортежем: STORE_ATTR пары - это два байткода, между ними
+            # _do_refresh в главном потоке увидел бы новый список со старым статусом
+            self._snapshot = (merged, {u: None for u, _, _ in merged})
+            self.proxies, self.status = self._snapshot
             self._fetched_url = src_url or ""  # источник, по которому реально качали
             total = len(self.proxies)
             self._load_prefix = f"Загружено {len(proxies)} прокси"

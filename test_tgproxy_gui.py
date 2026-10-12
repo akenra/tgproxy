@@ -1234,3 +1234,22 @@ def test_merge_cache_crash_caught_by_catchall(app, tk, monkeypatch):
     pump(tk, 200)
     assert app.busy is False, "неожиданный отказ в merge не снял busy"
     assert "прервана" in app.label.cget("text").lower()
+
+
+def test_tk_error_swallows_permission_error(app, tk, tmp_path, monkeypatch):
+    """_tk_error в read-only каталоге не каскадит."""
+    monkeypatch.setattr(g, "ERROR_LOG", "Z:/nonexistent-ro/err.log")
+    try:
+        app._tk_error(RuntimeError, RuntimeError("тест"), None)
+    except OSError as e:
+        raise AssertionError(f"_tk_error роняет: {e}")
+
+
+def test_snapshot_pair_assignment_atomic(app, tk, monkeypatch):
+    """Proxies и status меняются из одного кортежа-снапшота."""
+    monkeypatch.setattr(g, "fetch_all", lambda urls: ([(u("h", 443), "h", 443)], 0, [], 0))
+    monkeypatch.setattr(g, "alive", lambda url: True)
+    app.load_and_check()
+    wait_done(app, tk)
+    assert app._snapshot[0] == app.proxies
+    assert app._snapshot[1] == app.status
