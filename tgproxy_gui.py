@@ -198,8 +198,10 @@ class App:
 
         self.label = Label(root, wraplength=740, justify=LEFT,
                            text="Начните с кнопки «1. Загрузить» слева внизу. "
-                                      "Подробная инструкция - кнопка «?» справа внизу.", anchor=W)
+                                     "Подробная инструкция - кнопка «?» справа внизу.", anchor=W)
         self.label.pack(fill=BOTH, padx=8, pady=(8, 2))
+
+        self._restore_cached()
 
         self.progress = ttk.Progressbar(root, mode="indeterminate")
         # показывается только во время фоновой работы (см. _busy_on/_busy_off)
@@ -233,6 +235,24 @@ class App:
     def _on_close(self):
         self._closing = True
         self.root.destroy()
+
+    def _restore_cached(self):
+        """Старт из кэша прошлой проверки: список виден сразу, сеть не трогаем."""
+        cached = load_settings().get("last_results", {})
+        rows = []
+        for url, ok in cached.items():
+            if valid(url):
+                rows.append((url, *parse(url)[1:]))
+        if not rows:
+            return
+        # живые сверху: сортировка та же, что в _do_refresh
+        rows.sort(key=lambda p: not cached[p[0]])
+        self.proxies = rows
+        self.status = {url: cached[url] for url, _, _ in rows}
+        self.refresh(f"Восстановлено из кэша прошлой проверки: {len(rows)} прокси, "
+                     f"живых {sum(1 for v in self.status.values() if v)}. "
+                     f"Нажмите «2. Проверить», чтобы проверить заново, "
+                     f"или «1. Загрузить» - свежий список из интернета")
 
     def _tk_error(self, exc_type, exc_value, tb):
         # исключение в Tk-колбэке (windowed-exe без stderr): в файл, не молча
@@ -351,7 +371,13 @@ class App:
                 save_last_results(self.status)  # кэш для приоритета в следующий раз
             self._after(0, self._busy_off)
             if done == total:
-                self._after(0, self.refresh, f"Готово: живых {alive_n} из {total}. Теперь «3. Включить»")
+                if alive_n == 0 and total > 0:
+                    self._after(0, self.refresh,
+                                f"Готово: живых 0 из {total}. Возможно, список устарел - "
+                                f"нажмите «1. Загрузить» для свежего списка из интернета "
+                                f"и проверьте снова")
+                else:
+                    self._after(0, self.refresh, f"Готово: живых {alive_n} из {total}. Теперь «3. Включить»")
             else:  # оборвалось исключением: не выдаём проверку за завершённую
                 self._after(0, self.refresh,
                             f"Проверка прервана на {done}/{total}, живых {alive_n}. Повторите «2. Проверить»")

@@ -6,6 +6,7 @@ alive() подменяется заглушкой через monkeypatch, пот
 Запуск: python -m pytest test_tgproxy_gui.py -q
 Пропуск без дисплея: тесты сами скипаются, если Tk не стартует (CI без X).
 """
+import json
 import threading
 import sys
 import time
@@ -30,8 +31,12 @@ def tk():
 
 
 @pytest.fixture()
-def app(tk):
-    return g.App(tk)
+def app(tk, tmp_path):
+    """App с SETTINGS на временный файл: кэш-тесты не мусорят друг другу."""
+    import tgproxy_gui as _g
+    saved = _g.SETTINGS
+    _g.SETTINGS = str(tmp_path / "settings.json")
+    return _g.App(tk)
 
 
 def u(server, port, secret="a" * 32):
@@ -581,3 +586,77 @@ def test_save_last_results_oserror_swallowed(monkeypatch):
 
     monkeypatch.setattr("builtins.open", boom)
     g.save_last_results({"x": True})  # не должно бросить
+
+
+def new_root():
+    """Отдельный Tk для тестов, где фикстурный root занят."""
+    try:
+        from tkinter import Tk
+        r = Tk()
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"Tk недоступен: {e}")
+    r.withdraw()
+    return r
+
+
+# ---------- старт из кэша прошлых результатов ----------
+
+def test_startup_loads_cached_proxies(app, tk, tmp_path, monkeypatch):
+    """При старте кэш last_results превращается в список со статусами, без сети."""
+    p = tmp_path / "s.json"
+    url1, url2 = u("live.example", 443), u("dead.example", 443)
+    p.write_text(json.dumps({"last_results": {url1: True, url2: False}}), encoding="utf-8")
+    monkeypatch.setattr(g, "SETTINGS", str(p))
+
+    app2 = g.App(new_root())
+    try:
+        assert [pr[0] for pr in app2.proxies] == [url1, url2]
+        assert app2.status == {url1: True, url2: False}
+        pump(tk, 150)  # refresh батчится на 100мс
+        assert "кэша" in app2.label.cget("text")
+        assert "живых 1" in app2.label.cget("text")
+    finally:
+        app2._on_close()
+
+
+def test_startup_skips_invalid_cached(app, tk, tmp_path, monkeypatch):
+    """Мусорные ссылки в кэше не попадают в список (валидатор)."""
+    p = tmp_path / "s.json"
+    good = u("ok.example", 443)
+    p.write_text(json.dumps({"last_results": {good: True, "https://t.me/garbage": True,
+                                             "https://t.me/proxy?server=x&port=1&secret=short": False}}),
+                 encoding="utf-8")
+    monkeypatch.setattr(g, "SETTINGS", str(p))
+
+    app2 = g.App(new_root())
+    try:
+        assert [pr[0] for pr in app2.proxies] == [good]
+    finally:
+        app2._on_close()
+
+
+def test_startup_no_cache_empty_list(app, tk, tmp_path, monkeypatch):
+    """Нет кэша - список пуст, стартовое сообщение как раньше."""
+    p = tmp_path / "s.json"
+    p.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(g, "SETTINGS", str(p))
+
+    app2 = g.App(new_root())
+    try:
+        assert app2.proxies == []
+        assert "кэша" not in app2.label.cget("text")
+    finally:
+        app2._on_close()
+
+
+def test_check_zero_alive_suggests_refresh(app, tk, monkeypatch, tmp_path):
+    """Проверка с 0 живых предлагает «1. Загрузить» - возможно, список устарел."""
+    monkeypatch.setattr(g, "SETTINGS", str(tmp_path / "s.json"))  # не писать кэш в реальный файл
+    app.proxies = [(u("x", 443), "x", 443)]
+    monkeypatch.setattr(g, "alive", lambda url: False)
+    app.check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    text = app.label.cget("text")
+    assert "Готово: живых 0" in text
+    assert "1. Загрузить" in text
