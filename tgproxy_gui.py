@@ -2,11 +2,11 @@
 # tgproxy_gui.py: качает список MTProto-прокси, проверяет полным хендшейком,
 # копирует живых в буфер и открывает первого через tg:// (Telegram добавит сам).
 # Кроссплатформенно: tkinter + webbrowser, единственная зависимость - mtproxy-checker.
-import base64, json, os, queue, re, sys, threading, time, webbrowser
+import base64, json, os, queue, re, sys, threading, time, traceback, webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import (Tk, Listbox, Button, Label, Toplevel, Entry, Frame,
                      BOTH, LEFT, RIGHT, W, END, SINGLE, DISABLED, NORMAL, NW)
-from tkinter import ttk
+from tkinter import ttk, Scrollbar
 from urllib import request as rq, parse as ps
 
 from mtproxy_checker import CheckOptions, check_proxy
@@ -68,6 +68,13 @@ HELP = """ЧТО ДЕЛАЕТ ЭТА ПРОГРАММА
 # берём каталог исполняемого файла
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 SETTINGS = os.path.join(APP_DIR, "tgproxy_settings.json")
+ERROR_LOG = os.path.join(APP_DIR, "tgproxy_error.log")
+
+
+def _log_traceback():
+    """В windowed-exe stderr нет: traceback в файл рядом с программой."""
+    with open(ERROR_LOG, "a", encoding="utf-8") as f:
+        traceback.print_exc(file=f)
 
 
 def parse(line):
@@ -117,7 +124,11 @@ def fetch_all(urls):
     for name, url in urls.items():
         try:
             with rq.urlopen(url, timeout=30) as r:
-                text = r.read().decode("utf-8-sig")
+                raw = r.read()
+            try:
+                text = raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = raw.decode("utf-8-sig", errors="replace")  # битый UTF-8 не валит источник
         except Exception as e:
             fails.append((name, str(e)))
             continue
@@ -167,7 +178,7 @@ class App:
 
         self.listbox = Listbox(root, selectmode=SINGLE, exportselection=False)
         self.listbox.pack(side=LEFT, fill=BOTH, expand=True, padx=(8, 0), pady=4)
-        sb = __import__('tkinter').Scrollbar(root, command=self.listbox.yview)
+        sb = Scrollbar(root, command=self.listbox.yview)
         sb.pack(side=RIGHT, fill='y', pady=4)
         self.listbox.config(yscrollcommand=sb.set)
         self.listbox.bind("<Double-Button-1>", self.open_selected)
@@ -184,6 +195,20 @@ class App:
         Button(bar, text="?", width=3, command=self.show_help).pack(side=RIGHT, padx=2)
         Button(bar, text="Настройки", width=10, command=self.show_settings).pack(side=RIGHT, padx=2)
         self.root.after(25, self._drain)  # поллинг очереди колбэков в главном потоке
+        # закрытие окна при живом фоновой работе: гасим очередь, чтобы finally в _drain
+        # не звал after() на уничтоженном root (traceback ушёл бы в никуда в windowed-exe)
+        self._closing = False
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
+        root.report_callback_exception = self._tk_error  # windowed-exe без stderr: пишем в лог
+
+    def _on_close(self):
+        self._closing = True
+        self.root.destroy()
+
+    def _tk_error(self, exc_type, exc_value, tb):
+        # исключение в Tk-колбэке (windowed-exe без stderr): в файл, не молча
+        with open(ERROR_LOG, "a", encoding="utf-8") as f:
+            traceback.print_exception(exc_type, exc_value, tb, file=f)
 
     def set(self, text):
         self.label.config(text=text)
@@ -196,14 +221,17 @@ class App:
 
     def _drain(self):
         # reschedule в finally: если after() на колбэке бросил (окно закрывается),
-        # поллинг всё равно продолжится, иначе очередь замрёт навсегда
+        # поллинг всё равно продолжится, иначе очередь замрёт навсегда.
+        # _closing: после WM_DELETE_WINDOW тики не планируются (root уничтожен).
+        if getattr(self, "_closing", False):
+            return
         try:
             while True:
                 ms, fn, args = self._q.get_nowait()
                 try:
                     self.root.after(ms, fn, *args)
                 except Exception:
-                    pass  # окно закрыли во время работы потока
+                    _log_traceback()  # в windowed-сборке терять колбэк молча нельзя
         except queue.Empty:
             pass
         finally:
@@ -246,6 +274,8 @@ class App:
             self._after(0, self._busy_off)
             self._after(0, self.set, f"Ошибка загрузки: {e}. Проверьте интернет и URL в настройках")
             return
+        # оба присваивания атомарны для читателя: refresh ставится в очередь после них,
+        # а исполняется в главном потоке - новые proxies всегда приходят вместе со status
         self.proxies = proxies
         self.status = {u: None for u, _, _ in self.proxies}
         msg = f"Загружено {len(self.proxies)} прокси (дубликатов отброшено: {dups}), теперь нажмите «2. Проверить»"
@@ -286,7 +316,11 @@ class App:
         finally:
             # без finally исключение в alive() оставило бы кнопки навсегда выключенными
             self._after(0, self._busy_off)
-            self._after(0, self.refresh, f"Готово: живых {alive_n} из {total}. Теперь «3. Включить»")
+            if done == total:
+                self._after(0, self.refresh, f"Готово: живых {alive_n} из {total}. Теперь «3. Включить»")
+            else:  # оборвалось исключением: не выдаём проверку за завершённую
+                self._after(0, self.refresh,
+                            f"Проверка прервана на {done}/{total}, живых {alive_n}. Повторите «2. Проверить»")
 
     def enable(self):
         if self.busy:
@@ -301,8 +335,9 @@ class App:
             return
         self.root.clipboard_clear()
         self.root.clipboard_append("\n".join(good) + "\n")
-        # clipboard_append живёт, пока жив Tk; закрепляем в системный буфер
-        # update_idletasks (не update): не обрабатывает клики, re-entrancy исключена
+        # закрепление в системный буфер: на X11/Wayland буфер живёт, пока жив процесс Tk,
+        # поэтому приложение не закрывается само; update_idletasks обрабатывает запросы
+        # выделения от других приложений, не клики (re-entrancy исключена)
         self.root.update_idletasks()
         # t.me тут открывается браузером (обработчик tg:// есть, t.me у машины нет),
         # поэтому прямиком в протокол Telegram: tg://proxy?...
@@ -392,7 +427,8 @@ class App:
                 return
             try:
                 with open(SETTINGS, "w", encoding="utf-8") as f:
-                    json.dump({"list_url": url}, f) if url else json.dump({}, f)
+                    # пустой URL = сброс на предустановленные, храним пустой dict
+                    json.dump({"list_url": url} if url else {}, f)
             except OSError as e:
                 self.set(f"Не удалось сохранить настройки: {e}")
                 return

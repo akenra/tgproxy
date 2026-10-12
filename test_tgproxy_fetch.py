@@ -25,6 +25,21 @@ class FakeResponse:
         return False
 
 
+class FakeResponse_raw:
+    """Ответ сырыми байтами (для тестов битого UTF-8)."""
+    def __init__(self, data):
+        self._data = data
+
+    def read(self):
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
 # ---------- fetch_all: дедуп, битые строки, упавший источник ----------
 
 def test_fetch_all_dedup_bad_and_fail(monkeypatch):
@@ -67,6 +82,17 @@ def test_fetch_all_server_dot_normalization(monkeypatch):
     monkeypatch.setattr(g.rq, "urlopen", fake_urlopen)
     proxies, bad, fails, dups = g.fetch_all({"zakky8": g.PRESETS["zakky8"]})
     assert len(proxies) == 1 and dups == 1
+
+
+def test_fetch_all_invalid_utf8_replaced(monkeypatch):
+    """Битый UTF-8 в ответе источника не валит источник: строки декодируются с replace."""
+    def fake_urlopen(url, timeout):
+        return FakeResponse_raw(b"\xff\xfe " + u("h1", 443).encode("utf-8"))
+
+    monkeypatch.setattr(g.rq, "urlopen", fake_urlopen)
+    proxies, bad, fails, dups = g.fetch_all({"zakky8": g.PRESETS["zakky8"]})
+    assert fails == []  # источник не упал
+    assert [(s, p) for _, s, p in proxies] == [("h1", 443)]
 
 
 # ---------- alive: хендшейк ----------

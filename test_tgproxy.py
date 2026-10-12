@@ -105,21 +105,24 @@ def test_valid_empty_server():
     assert not g.valid(u("", 443, HEX32))
 
 
-# ---------- дедупликация ----------
+# ---------- дедупликация (продакшн-код fetch_all, сеть подменяется) ----------
 
 def _fetch_text(text):
-    out, bad = [], 0
-    seen = set()
-    for line in text.split():
-        if g.valid(line):
-            p = g.parse(line)
-            key = (p[1], p[2], ps.parse_qs(ps.urlparse(p[0]).query)["secret"][0])
-            if key not in seen:
-                seen.add(key)
-                out.append(p)
-        else:
-            bad += 1
-    return out, bad
+    """Дедуп через реальный fetch_all с подменой urlopen: тестируем продакшн-код."""
+    from unittest.mock import patch
+
+    class R:
+        def read(self):
+            return text.encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    with patch.object(g.rq, "urlopen", lambda url, timeout: R()):
+        return g.fetch_all({"test": "http://fake/"})[:2]  # (proxies, bad)
 
 
 def test_dedup_same_proxy_different_server_spelling():

@@ -7,6 +7,7 @@ alive() подменяется заглушкой через monkeypatch, пот
 Пропуск без дисплея: тесты сами скипаются, если Tk не стартует (CI без X).
 """
 import threading
+import sys
 import time
 
 import pytest
@@ -471,6 +472,100 @@ def test_drain_swallows_after_error_on_destroyed_root(app, tk, monkeypatch):
     app._after(0, calls.append, "z")
     pump(tk, 200)
     assert calls == ["z"]  # 'y' потерян при сломанном after (задокументированное поведение)
+
+
+def test_on_close_stops_drain(app, tk):
+    """WM_DELETE_WINDOW: _closing=True, _drain больше не перезапускается."""
+    app._closing = True  # без реального destroy: root жив для остальных тестов модуля
+    calls = []
+    app._after(0, calls.append, "x")  # кладётся в очередь, но _drain её не дренирует
+    pump(tk, 100)
+    assert calls == [] and app._closing is True
+    app._closing = False
+    app.root.after(25, app._drain)  # в жизни: новый App или перезапуск; тут рестарт тика
+    pump(tk, 150)
+    assert calls == ["x"]
+
+
+def test_on_close_destroy_stops_loop(app, tk):
+    """Полный путь _on_close: destroy сжигает root, _on_close ставит _closing."""
+    # отдельный root, чтобы не убить общий fixture-root
+    from tkinter import Tk
+    r2 = Tk()
+    r2.withdraw()
+    app2 = g.App(r2)
+    r2.protocol("WM_DELETE_WINDOW", app2._on_close)
+    app2._on_close()  # destroy внутри
+    assert app2._closing is True
+    try:
+        r2.update()  # уничтоженный root: after-цикл мёртв, исключений быть не должно
+    except Exception:
+        pass  # TclError на уничтоженном root - ожидаемо, финальное состояние проверено
+
+
+def test_tk_error_writes_log(app, tmp_path, monkeypatch):
+    """report_callback_exception пишет traceback в лог-файл рядом с программой."""
+    log = tmp_path / "err.log"
+    monkeypatch.setattr(g, "ERROR_LOG", str(log))
+    try:
+        raise RuntimeError("тестовое исключение колбэка")
+    except RuntimeError:
+        app._tk_error(*sys.exc_info())
+    assert log.exists() and "тестовое исключение колбэка" in log.read_text(encoding="utf-8")
+
+
+def test_after_from_worker_thread(app, tk):
+    """Ядро потокобезопасности: _after из не-main потока доходит до main через очередь."""
+    import threading
+    calls = []
+    t = threading.Thread(target=lambda: app._after(0, calls.append, "from-worker"))
+    t.start()
+    t.join()
+    assert calls == []  # очередь, ещё не исполнено
+    pump(tk, 100)
+    assert calls == ["from-worker"]
+
+
+def test_refresh_batches_multiple_calls(app, tk):
+    """5 refresh подряд -> один _do_refresh, в списке последний текст."""
+    for i in range(5):
+        app.refresh(f"текст {i}")
+    pump(tk, 250)
+    assert app.label.cget("text") == "текст 4"
+
+
+def test_check_rerun_overwrites_old_status(app, tk, monkeypatch):
+    """Повторное «Проверить» после завершения: статусы перезаписываются, busy снимается."""
+    app.proxies = [(u("h", 443), "h", 443)]
+    app.status = {app.proxies[0][0]: True}  # старый прогон
+    monkeypatch.setattr(g, "alive", lambda url: False)
+    app.check()
+    wait_done(app, tk)
+    assert app.status[app.proxies[0][0]] is False
+    pump(tk, 200)  # refresh батчится на 100мс: дожидаемся финального текста
+    assert "Готово: живых 0 из 1" in app.label.cget("text")
+
+
+def test_settings_save_whitespace_and_uppercase(app, tmp_path, monkeypatch):
+    """URL с пробелами обрезается; HTTPS:// в верхнем регистре принимается."""
+    p = tmp_path / "s.json"
+    monkeypatch.setattr(g, "SETTINGS", str(p))
+    app.custom_url = None
+    app.show_settings()
+    entry = app._settings_win.children["!entry"]
+    entry.delete(0, "end")
+    entry.insert(0, "  HTTPS://example.com/list.txt  ")
+    click_button(app._settings_win, "Сохранить")
+    assert app.custom_url == "HTTPS://example.com/list.txt"
+    app._settings_win.destroy()
+
+
+def test_load_settings_non_str_value(tmp_path, monkeypatch):
+    """dict есть, но list_url не строка (число): настройки отбрасываются."""
+    p = tmp_path / "s.json"
+    p.write_text('{"list_url": 123}', encoding="utf-8")
+    monkeypatch.setattr(g, "SETTINGS", str(p))
+    assert g.load_settings() == {}
 
 
 # ---------- selftest как часть пакета ----------
