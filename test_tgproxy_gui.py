@@ -15,7 +15,6 @@ import pytest
 
 import tgproxy_gui as g
 
-pytestmark = pytest.mark.usefixtures("app")
 
 
 @pytest.fixture(scope="module")
@@ -33,7 +32,9 @@ def tk():
 @pytest.fixture()
 def app(tk, tmp_path, monkeypatch):
     """App с SETTINGS на временный файл: кэш-тесты не мусорят друг другу.
-    monkeypatch сам восстановит значение после теста."""
+    monkeypatch сам восстановит значение после теста.
+    Замечание: _on_close в тесте destroy'ит фикстурный root - после такого теста
+    соседние тесты модуля не живут; держим destroy-тесты на отдельных root."""
     import tgproxy_gui as _g
     monkeypatch.setattr(_g, "SETTINGS", str(tmp_path / "settings.json"))
     return _g.App(tk)
@@ -768,11 +769,10 @@ def test_settings_save_keeps_cached_results(app, tk, monkeypatch):
     assert saved.get("last_results") == {u("h", 443): True}
 
 
-def test_fixture_app_does_not_touch_real_settings(app):
-    """Во время теста с fixture app g.SETTINGS указывает на tmp, не на реальный файл."""
+def test_fixture_app_does_not_touch_real_settings(app, tmp_path):
+    """Во время теста с fixture app g.SETTINGS указывает на tmp_path."""
     import tgproxy_gui as _g
-    assert _g.SETTINGS.endswith("settings.json")
-    assert "tgproxy" not in _g.SETTINGS or "pytest" in _g.SETTINGS or "temp" in _g.SETTINGS.lower()
+    assert _g.SETTINGS.startswith(str(tmp_path))
 
 
 def test_startup_message_counts_only_visible(app, tk, monkeypatch):
@@ -864,3 +864,32 @@ def test_merge_cache_dedups_same_proxy_different_spelling(app, tk, monkeypatch):
     app.load_and_check()
     wait_done(app, tk)
     assert [pr[0] for pr in app.proxies] == [url_fresh]  # дубль не добавлен
+
+
+# ---------- регрессии ----------
+
+def test_executor_shutdown_on_close_mid_check(tmp_path, monkeypatch):
+    """Закрытие окна посреди проверки не оставляет зомби-процесс:
+    executor выключается с cancel_futures, невыполненные задачи не гоняются.
+    Свой Tk: тест уничтожает окно насовсем, фикстурный root не трогаем."""
+    import threading as th
+    started = th.Event()
+    release = th.Event()
+    monkeypatch.setattr(g, "SETTINGS", str(tmp_path / "settings.json"))
+
+    def slow_alive(url):
+        started.set()
+        release.wait(5)  # держим воркер занятым
+        return True
+
+    root = new_root()
+    app = g.App(root)
+    app.proxies = [(u(f"h{i}", 443), f"h{i}", 443) for i in range(50)]
+    app.status = {p[0]: None for p in app.proxies}
+    monkeypatch.setattr(g, "alive", slow_alive)
+    app.load_and_check()
+    started.wait(2)  # хотя бы одна задача пошла
+    app._on_close()
+    release.set()
+    # executor выключен: очередь задач отменена, невыполненные не гоняются
+    assert app._ex._shutdown, "executor не выключен при закрытии окна"

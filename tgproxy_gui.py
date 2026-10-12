@@ -252,6 +252,10 @@ class App:
 
     def _on_close(self):
         self._closing = True
+        # executor выключаем с отменой очереди: иначе процесс после закрытия окна
+        # джойнит сотни задач, десятки секунд оставаясь невидимым
+        if getattr(self, "_ex", None) is not None:
+            self._ex.shutdown(wait=False, cancel_futures=True)
         self.root.destroy()
 
     def _restore_cached(self):
@@ -405,6 +409,7 @@ class App:
         load_msg = getattr(self, "_load_prefix", "")  # счётчики загрузки из load_and_check
         try:
             with ThreadPoolExecutor(128) as ex:
+                self._ex = ex  # для shutdown(cancel_futures) при закрытии окна
                 for url, ok in zip(urls, ex.map(alive, urls)):
                     self.status[url] = ok
                     done += 1
@@ -444,8 +449,9 @@ class App:
         self.root.clipboard_clear()
         self.root.clipboard_append("\n".join(good) + "\n")
         # закрепление в системный буфер: на X11/Wayland буфер живёт, пока жив процесс Tk,
-        # поэтому приложение не закрывается само; update_idletasks обрабатывает запросы
-        # выделения от других приложений, не клики (re-entrancy исключена)
+        # поэтому приложение не закрывается само. update_idletasks обрабатывает отложенные
+        # задачи Tk, но selection-запросы чужих процессов на X11 обслуживает event loop,
+        # поэтому важно, чтобы процесс продолжал жить (mainloop не завершается)
         self.root.update_idletasks()
         # t.me тут открывается браузером (обработчик tg:// есть, t.me у машины нет),
         # поэтому прямиком в протокол Telegram: tg://proxy?...
