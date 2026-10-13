@@ -379,6 +379,9 @@ class App:
         threading.Thread(target=self._load_and_check, args=(src_url,), daemon=True).start()
 
     def _load_and_check(self, src_url):
+        # gc выключен, как в _check: gc-цикл в не-main потоке при живом Tcl-мейнлупе
+        # роняет интерпретатор (Windows CI 0x80000003 в _log_traceback)
+        gc.disable()
         try:
             urls = {"свой": src_url} if src_url else PRESETS
             try:
@@ -439,6 +442,8 @@ class App:
             _log_traceback()
             self._after(0, self._busy_off)
             self._after(0, self.set, "Загрузка прервана внутренней ошибкой (см. лог) - повторите")
+        finally:
+            gc.enable()
 
     def _run_check(self, total):
         """Проверка: determinate-полоса по числу проверенных, живые вверх, кэш по итогам."""
