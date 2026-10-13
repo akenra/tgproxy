@@ -6,3 +6,4 @@ build/
 *.spec
 .pytest_cache/
 tgproxy_settings.json
+tgproxy_error.log
