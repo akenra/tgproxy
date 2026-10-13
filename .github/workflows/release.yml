@@ -6,6 +6,9 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   build:
@@ -36,6 +39,10 @@ jobs:
         run: |
           if [ -f dist/tgproxy_gui.exe ]; then mv dist/tgproxy_gui.exe dist/${{ matrix.artifact }};
           else mv dist/tgproxy_gui dist/${{ matrix.artifact }}; fi
+      - name: Аттестация провенанса сборки
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/${{ matrix.artifact }}
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/${{ matrix.artifact }}
