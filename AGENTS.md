@@ -15,6 +15,7 @@
 - Запуск приложения: `python tgproxy_gui.py`.
 - Прогон без покрытия: `python -m pytest -o addopts=''`.
 - Локальная сборка: `pyinstaller --onefile --windowed --name tgproxy_gui tgproxy_gui.py`.
+- Проверка сообщений коммитов: `python ci/check_commit_messages.py HEAD~5..HEAD`.
 
 ## COMMIT MESSAGES (MANDATORY)
 
@@ -26,6 +27,7 @@
 - Тело через пустую строку: что и почему; до 72 символов в строке. Для тривиальных правок можно опустить.
 - Описания по-русски; `type(scope)` остаётся английским.
 - Один коммит - одно логическое изменение; не смешивать рефакторинг со сменой поведения.
+- Формат проверяет CI: джоба `commits` в workflow tests прогоняет `ci/check_commit_messages.py` по коммитам пуша или pull request'а.
 
 Пример:
 
