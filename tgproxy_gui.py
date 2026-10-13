@@ -2,7 +2,7 @@
 # tgproxy_gui.py: качает список MTProto-прокси, проверяет полным хендшейком,
 # копирует живых в буфер и открывает первого через tg:// (Telegram добавит сам).
 # Кроссплатформенно: tkinter + webbrowser, единственная зависимость - mtproxy-checker.
-import base64, json, os, queue, re, socket, sys, threading, time, traceback, webbrowser
+import base64, gc, json, os, queue, re, socket, sys, threading, time, traceback, webbrowser
 import concurrent.futures as cf
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import (Tk, Listbox, Button, Label, Toplevel, Entry, Frame, Text,
@@ -468,18 +468,22 @@ class App:
                 # Python 3.14: map сабмитит лениво - если окно закрыли и executor
                 # уже shutdown, итерация бросит RuntimeError; это штатный выход
                 try:
-                    # gc в потоке воркера собирает внутренние Future'ы map'а и роняет
-                    # интерпретатор на Tcl 8.6/linux (RLock-объекты при осмотре из
-                    # чужого потока): держим iterator и его хвост живыми до конца
-                    results = self._ex.map(alive, urls)
-                    _keepalive = [results]
-                    for url, ok in zip(urls, results):
-                        self.status[url] = ok
-                        done += 1
-                        alive_n += ok
-                        self._after(0, lambda v=done: self.progress.config(value=v))
-                        self._after(0, self.refresh,
-                                        f"{load_msg}{' ' if load_msg else ''}Проверено {done}/{total}, живых {alive_n}")
+                    # gc в потоке воркера при аллокации Future (RLock в __init__)
+                    # роняет интерпретатор на Tcl 8.6/linux: gc осматривает объекты
+                    # чужого потока в момент захвата. Циклов у Future нет, refcount
+                    # уберёт всё сам: gc на время проверки выключаем
+                    gc.disable()
+                    try:
+                        results = self._ex.map(alive, urls)
+                        for url, ok in zip(urls, results):
+                            self.status[url] = ok
+                            done += 1
+                            alive_n += ok
+                            self._after(0, lambda v=done: self.progress.config(value=v))
+                            self._after(0, self.refresh,
+                                            f"{load_msg}{' ' if load_msg else ''}Проверено {done}/{total}, живых {alive_n}")
+                    finally:
+                        gc.enable()
                 except RuntimeError:
                     pass  # executor выключен закрытием окна: выходим через finally
                 except cf.CancelledError:
