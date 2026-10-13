@@ -22,6 +22,7 @@ Cross-platform GUI app: it downloads fresh public MTProto proxy lists, checks ea
 - [Tests](#tests)
 - [Build](#build)
 - [Contributing](#contributing)
+- [Credits](#credits)
 - [License](#license)
 
 ## Why
@@ -112,6 +113,10 @@ The ready binary appears in `dist/`. Release builds are published with a `vX.Y.Z
 ## Contributing
 
 Issues and pull requests are welcome. Before a PR, run the tests (`python -m pytest -q`) and format your commits per Conventional Commits: the message format is checked automatically in CI; details and the scope vocabulary are in [AGENTS.md](AGENTS.md). The full contributor guide is in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Credits
+
+The proxy check itself is done by [mtproxy-checker](https://github.com/alimghmi/mtproxychecker) (MIT) by [alimghmi](https://github.com/alimghmi): thanks for a clean MTProxy handshake implementation. Prebuilt binaries bundle it together with its dependencies; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for their licenses.
 
 ## License
 

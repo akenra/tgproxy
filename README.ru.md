@@ -22,6 +22,7 @@
 - [Тесты](#тесты)
 - [Сборка](#сборка)
 - [Участие в разработке](#участие-в-разработке)
+- [Благодарности](#благодарности)
 - [Лицензия](#лицензия)
 
 ## Почему
@@ -112,6 +113,10 @@ pyinstaller --onefile --name tgproxy_gui tgproxy_gui.py
 ## Участие в разработке
 
 Issues и pull request'ы приветствуются. Перед PR прогоните тесты (`python -m pytest -q`) и оформите коммиты по Conventional Commits - формат сообщений автоматически проверяется в CI; подробности и словарь scope - в [AGENTS.md](AGENTS.md). Полное руководство для контрибьюторов - в [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Благодарности
+
+Саму проверку выполняет [mtproxy-checker](https://github.com/alimghmi/mtproxychecker) (MIT) от [alimghmi](https://github.com/alimghmi): спасибо за аккуратную реализацию MTProxy-хендшейка. Готовые бинари включают её и её зависимости; их лицензии - в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Лицензия
 
