@@ -26,3 +26,19 @@ jobs:
       - run: pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git" pytest pytest-forked
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
       - run: xvfb-run -a python -m pytest -q --forked -o addopts=''
+  commits:
+    # формат сообщений коммитов: Conventional Commits (канон в AGENTS.md)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Проверить сообщения коммитов
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -n "$PR_BASE" ]; then RANGE="$PR_BASE..$PR_HEAD"; else RANGE="$BEFORE..$SHA"; fi
+          python3 ci/check_commit_messages.py "$RANGE"
