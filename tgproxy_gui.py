@@ -2,10 +2,10 @@
 # tgproxy_gui.py: качает список MTProto-прокси, проверяет полным хендшейком,
 # копирует живых в буфер и открывает первого через tg:// (Telegram добавит сам).
 # Кроссплатформенно: tkinter + webbrowser, единственная зависимость - mtproxy-checker.
-import base64, gc, json, os, queue, re, socket, sys, threading, time, traceback, webbrowser
+import base64, gc, json, locale, os, queue, re, socket, sys, threading, time, traceback, webbrowser
 import concurrent.futures as cf
 from concurrent.futures import ThreadPoolExecutor
-from tkinter import (Tk, Listbox, Button, Label, Toplevel, Entry, Frame, Text,
+from tkinter import (Tk, Listbox, Button, Label, Toplevel, StringVar, Radiobutton, Entry, Frame, Text,
                      BOTH, LEFT, RIGHT, W, END, SINGLE, DISABLED, NORMAL)
 from tkinter import ttk, Scrollbar
 from urllib import request as rq, parse as ps
@@ -58,7 +58,7 @@ HELP = """ЧТО ДЕЛАЕТ ЭТА ПРОГРАММА
 Двойной клик по строке списка - открыть одиночную ссылку
 этого прокси в Telegram.
 
-«Настройки» - URL списка прокси. По умолчанию программа
+«Настройки» - URL списка прокси и язык интерфейса. По умолчанию программа
 обходит ВСЕ предустановленные источники (3 проверенных списка,
 обновляются автоматически каждые 6-12 часов) и отбрасывает
 дубликаты. Можно подставить один свой URL (тогда только он).
@@ -77,6 +77,152 @@ HELP = """ЧТО ДЕЛАЕТ ЭТА ПРОГРАММА
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 SETTINGS = os.path.join(APP_DIR, "tgproxy_settings.json")
 ERROR_LOG = os.path.join(APP_DIR, "tgproxy_error.log")
+
+
+HELP_EN = """WHAT THIS PROGRAM DOES
+
+It helps you connect to Telegram through a public MTProto proxy:
+it downloads a fresh proxy list, checks every entry for real
+(not just "port open", but a full handshake with Telegram) and connects you.
+
+HOW IT WORKS: TWO BUTTONS, LEFT TO RIGHT
+
+1. "Check proxies" - acts by state:
+   - no list yet (first run): downloads proxy lists
+     (from the URL in Settings, format: one link per line,
+     https://t.me/proxy?server=HOST&port=PORT&secret=SECRET)
+     and checks them right away. Previously alive proxies from the cache
+     are added to the fresh list and re-checked;
+   - the list is already shown: re-checks it without downloading.
+   Malformed lines are skipped, their number is shown in the status.
+   Only alive and unchecked proxies stay in the list:
+   dead ones do not clutter the screen, one that comes back appears again.
+
+2. "Enable" - does two things:
+   - copies the alive proxies to the clipboard (you can paste the whole list
+     into Telegram: Settings -> Data and Storage -> Proxy -> Add proxy -> Ctrl+V);
+   - opens the first alive proxy directly in Telegram (tg:// link),
+     a dialog appears - click "Enable proxy".
+
+MORE
+
+Double-click a list row to open the individual link
+of that proxy in Telegram.
+
+"Settings" - proxy list URL and interface language. By default the program
+goes through all built-in sources (3 checked lists,
+updated automatically every 6-12 hours) and drops
+duplicates. You can plug in one custom URL (then only it is used).
+Stored in the file tgproxy_settings.json next to the program.
+
+PRIVACY
+
+The program sends none of your data anywhere. The only traffic is
+the list request to the URL from Settings and direct proxy checks from
+your machine. These are public servers of unknown owners: do not
+use them for sensitive data. The proxy owner sees
+that you connect to Telegram, but not the content of your chats
+(MTProto encryption with a secret, end-to-end up to Telegram servers)."""
+
+# Язык интерфейса: русские строки в коде - ключи словаря EN, tr() отдаёт перевод.
+# _LANG меняется из настроек и действует сразу, без перезапуска приложения.
+_LANG = "ru"
+
+HINT = ("Нажмите «1. Проверить прокси»: скачает свежий список "
+        "и покажет только живых. Подробная инструкция - кнопка «?» справа внизу.")
+
+EN = {
+    "1. Проверить прокси": "1. Check proxies",
+    "2. Включить": "2. Enable",
+    "Настройки": "Settings",
+    "Справка": "Help",
+    "Закрыть": "Close",
+    "Нажмите «1. Проверить прокси»: скачает свежий список и покажет только живых. Подробная "
+    "инструкция - кнопка «?» справа внизу.":
+        "Click \"1. Check proxies\": it downloads a fresh list and shows only the alive proxies. "
+        "Detailed instructions - the \"?\" button at the bottom right.",
+    "все предустановленные источники": "all built-in sources",
+    "свой": "own",
+    "Загрузка {src} ...": "Loading {src} ...",
+    "Ошибка загрузки: {e}. Проверьте интернет и URL в настройках":
+        "Download failed: {e}. Check your connection and the URL in Settings",
+    "Списки пусты или в неправильном формате - проверьте интернет и URL в настройках":
+        "The lists are empty or malformed - check your connection and the URL in Settings",
+    "Восстановлено из кэша прошлой проверки: прокси в списке {n}, живых {alive}. Нажмите «1. "
+    "Проверить прокси», чтобы перепроверить их":
+        "Restored from the cache of the last check: {n} proxies in the list, {alive} alive. Click \"1. "
+        "Check proxies\" to re-check them",
+    "Загружено {n} прокси": "Loaded {n} proxies",
+    " (нажмите ещё раз, чтобы повторить упавшие источники)": " (click again to retry the failed sources)",
+    " (дубликатов отброшено: {dups}": " (duplicates dropped: {dups}",
+    ", некорректных строк: {bad}": ", malformed lines: {bad}",
+    " (некорректных строк: {bad})": " (malformed lines: {bad})",
+    "Загрузка прервана внутренней ошибкой (см. лог) - повторите":
+        "Download aborted by an internal error (see the log) - repeat",
+    "{pre}Проверка (полный MTProto-хендшейк)...": "{pre}Checking (full MTProto handshake)...",
+    "{load}Проверено {done}/{total}, живых {alive}": "{load}Checked {done}/{total}, {alive} alive",
+    "Готово: живых {a} из {b}.{tail} Теперь «2. Включить»": "Done: {a} of {b} alive.{tail} Now click \"2. Enable\"",
+    "Готово: живых {a} из {b}.{tail} Возможно, все источники устарели - попробуйте позже или свой URL "
+    "в настройках":
+        "Done: {a} of {b} alive.{tail} The sources may be outdated - try later or set your own URL in "
+        "Settings",
+    "Проверка прервана на {done}/{total}, живых {alive}. Повторите «1. Проверить прокси»":
+        "Check interrupted at {done}/{total}, {alive} alive. Repeat \"1. Check proxies\"",
+    "Сначала «1. Проверить прокси»": "Click \"1. Check proxies\" first",
+    "Нет живых прокси - сначала «1. Проверить прокси»": "No live proxies - click \"1. Check proxies\" first",
+    "Не удалось открыть tg://-ссылку: Telegram не установлен или не ассоциирован. Список живых уже в "
+    "буфере - вставьте вручную: Настройки -> Данные и память -> Прокси -> Добавить, Ctrl+V.":
+        "Could not open the tg:// link: Telegram is not installed or not associated. The alive "
+        "proxies are already in the clipboard - paste them manually: Settings -> Data and Storage -> "
+        "Proxy -> Add, Ctrl+V.",
+    "Живых {n}: первый открыт в Telegram - подтвердите «Включить прокси» в появившемся диалоге. Весь "
+    "список уже в буфере.":
+        "{n} alive: the first one is open in Telegram - confirm \"Enable proxy\" in the dialog that "
+        "appears. The whole list is already in the clipboard.",
+    "Не удалось открыть tg://-ссылку: Telegram не ассоциирован. Ссылка прокси: {url}":
+        "Could not open the tg:// link: Telegram is not associated. Proxy link: {url}",
+    "[живой] ": "[alive] ",
+    "Язык интерфейса:": "Interface language:",
+    "Авто": "Auto",
+    "URL списка прокси (формат: t.me/proxy?server=...&port=...&secret=...).\nПустое поле = обойти все "
+    "предустановленные источники:\n":
+        "Proxy list URL (format: t.me/proxy?server=...&port=...&secret=...).\nEmpty field = go through "
+        "all built-in sources:\n",
+    "URL должен начинаться с http:// или https:// (или пустое поле = все источники)":
+        "The URL must start with http:// or https:// (or an empty field = all sources)",
+    "Не удалось сохранить настройки: {e}": "Could not save the settings: {e}",
+    "Источники: все предустановленные. Нажмите «1. Проверить прокси».":
+        "Sources: all built-in ones. Click \"1. Check proxies\".",
+    "URL сохранён: {url}. Нажмите «1. Проверить прокси».": "URL saved: {url}. Click \"1. Check proxies\".",
+    "Сохранить": "Save",
+    "Все предустановленные": "All built-in",
+}
+
+
+def set_lang(lang):
+    """Язык интерфейса: "en" включает словарь EN, всё остальное - русский."""
+    global _LANG
+    _LANG = "en" if lang == "en" else "ru"
+
+
+def detect_lang():
+    """Авто: ru-локаль - русский, иная - английский; локаль не определилась
+    или читается со сбоем - русский (поведение до выбора языка)."""
+    try:
+        loc = (locale.getlocale()[0] or "").lower()
+    except ValueError:
+        return "ru"
+    return "en" if loc and not loc.startswith("ru") else "ru"
+
+
+def tr(s):
+    """Видимый текст на текущем языке; русская строка - ключ словаря EN."""
+    return EN.get(s, s) if _LANG == "en" else s
+
+
+def help_text():
+    """Полный текст справки на текущем языке."""
+    return HELP_EN if _LANG == "en" else HELP
 
 
 def _log_traceback():
@@ -192,6 +338,8 @@ def _load_settings_unlocked():
         out = {}
         if isinstance(s.get("list_url"), str):
             out["list_url"] = s["list_url"]
+        if s.get("lang") in ("ru", "en"):
+            out["lang"] = s["lang"]
         # кэш результатов прошлой проверки: url -> ok (для приоритета живых при повторе)
         if isinstance(s.get("last_results"), dict):
             out["last_results"] = {k: bool(v) for k, v in s["last_results"].items()
@@ -232,15 +380,16 @@ class App:
         self.proxies = []       # [(url, server, port)]
         self._fetched_url = "<none>"  # ещё не качали: кнопка обязана скачать
         self.status = {}        # url -> True/False/None (None = не проверен)
-        self.custom_url = load_settings().get("list_url")  # None = все предустановленные
+        settings = load_settings()
+        self.custom_url = settings.get("list_url")  # None = все предустановленные
+        self.lang = settings.get("lang")  # "ru"/"en"; None = Авто: язык по локали системы
+        set_lang(self.lang or detect_lang())
         self.busy = False       # защита от двойных нажатий
         root.title("TG Proxy Checker")
         root.geometry("760x500")
         root.minsize(560, 380)
 
-        self.label = Label(root, wraplength=740, justify=LEFT,
-                           text="Нажмите «1. Проверить прокси»: скачает свежий список "
-                                     "и покажет только живых. Подробная инструкция - кнопка «?» справа внизу.", anchor=W)
+        self.label = Label(root, wraplength=740, justify=LEFT, text=tr(HINT), anchor=W)
         self.label.pack(fill=BOTH, padx=8, pady=(8, 2))
 
         self._restore_cached()
@@ -259,12 +408,14 @@ class App:
 
         bar = Frame(root)
         bar.pack(fill=BOTH, padx=8, pady=(0, 8))
-        self.btn_load = Button(bar, text="1. Проверить прокси", width=20, command=self.load_and_check)
-        self.btn_enable = Button(bar, text="2. Включить", width=12, command=self.enable)
+        self.btn_load = Button(bar, text=tr("1. Проверить прокси"), width=20, command=self.load_and_check)
+        self.btn_enable = Button(bar, text=tr("2. Включить"), width=12, command=self.enable)
         self.btn_load.pack(side=LEFT, padx=2)
         self.btn_enable.pack(side=LEFT, padx=2)
-        Button(bar, text="?", width=3, command=self.show_help).pack(side=RIGHT, padx=2)
-        Button(bar, text="Настройки", width=10, command=self.show_settings).pack(side=RIGHT, padx=2)
+        self.btn_help = Button(bar, text="?", width=3, command=self.show_help)
+        self.btn_help.pack(side=RIGHT, padx=2)
+        self.btn_settings = Button(bar, text=tr("Настройки"), width=10, command=self.show_settings)
+        self.btn_settings.pack(side=RIGHT, padx=2)
         self.root.after(25, self._drain)  # поллинг очереди колбэков в главном потоке
         # закрытие окна при живом фоновой работе: гасим очередь, чтобы finally в _drain
         # не звал after() на уничтоженном root (traceback ушёл бы в никуда в windowed-exe)
@@ -294,9 +445,9 @@ class App:
         self.proxies = rows
         self.status = {url: cached[url] for url, _, _ in rows}
         visible = [url for url, _, _ in rows if self.status[url] is not False]
-        self.refresh(f"Восстановлено из кэша прошлой проверки: прокси в списке {len(visible)}, "
-                     f"живых {sum(1 for v in self.status.values() if v)}. "
-                     f"Нажмите «1. Проверить прокси», чтобы перепроверить их")
+        self.refresh(tr("Восстановлено из кэша прошлой проверки: прокси в списке {n}, "
+                        "живых {alive}. Нажмите «1. Проверить прокси», чтобы перепроверить их")
+                     .format(n=len(visible), alive=sum(1 for v in self.status.values() if v)))
 
     def _tk_error(self, exc_type, exc_value, tb):
         # исключение в Tk-колбэке (windowed-exe без stderr): в файл, не молча.
@@ -378,8 +529,8 @@ class App:
             self._run_check(len(self.proxies))
             return
         self._busy_on()
-        src = self.custom_url or "все предустановленные источники"
-        self.set(f"Загрузка {src} ...")
+        src = self.custom_url or tr("все предустановленные источники")
+        self.set(tr("Загрузка {src} ...").format(src=src))
         # источник фиксируем до старта потока: пользователь может сменить URL
         # в настройках, пока качается, - список должен остаться помечен старым
         src_url = self.custom_url
@@ -392,14 +543,15 @@ class App:
                 proxies, bad, fails, dups = fetch_all(urls)
             except Exception as e:
                 self._after(0, self._busy_off)
-                self._after(0, self.set, f"Ошибка загрузки: {e}. Проверьте интернет и URL в настройках")
+                self._after(0, self.set,
+                            tr("Ошибка загрузки: {e}. Проверьте интернет и URL в настройках").format(e=e))
                 return
             # оба присваивания атомарны для читателя: refresh ставится в очередь после них,
             # а исполняется в главном потоке - новые proxies всегда приходят вместе со status
             if not proxies:
                 self._after(0, self._busy_off)
                 self._after(0, self.refresh,
-                            "Списки пусты или в неправильном формате - проверьте интернет и URL в настройках")
+                            tr("Списки пусты или в неправильном формате - проверьте интернет и URL в настройках"))
                 return
             # прошлые живые из кэша доливаем к свежим и перепроверяем: могли ожить/умереть.
             # дедуп по тому же ключу, что в fetch_all: кэш может хранить другое написание
@@ -428,24 +580,24 @@ class App:
                 # а не уходить в перепроверку скачанного (иначе недостижимы без правки настроек)
                 self._fetched_url = "<retry-needed>"
             total = len(self.proxies)
-            self._load_prefix = f"Загружено {len(proxies)} прокси"
+            self._load_prefix = tr("Загружено {n} прокси").format(n=len(proxies))
             if fails:
-                self._load_prefix += " (нажмите ещё раз, чтобы повторить упавшие источники)"
+                self._load_prefix += tr(" (нажмите ещё раз, чтобы повторить упавшие источники)")
             if dups:
-                self._load_prefix += f" (дубликатов отброшено: {dups}"
+                self._load_prefix += tr(" (дубликатов отброшено: {dups}").format(dups=dups)
                 if bad:
-                    self._load_prefix += f", некорректных строк: {bad}"
+                    self._load_prefix += tr(", некорректных строк: {bad}").format(bad=bad)
                 self._load_prefix += ")"
             elif bad:
-                self._load_prefix += f" (некорректных строк: {bad})"
+                self._load_prefix += tr(" (некорректных строк: {bad})").format(bad=bad)
             for name, err in fails:
-                self._load_prefix += f"; [{name}: {err}]"
+                self._load_prefix += f"; [{tr(name)}: {err}]"
             # дальше общий хвост проверки: полоса, статус, тот же финальный текст
             self._after(0, self._run_check, total)
         except Exception:
             _log_traceback()
             self._after(0, self._busy_off)
-            self._after(0, self.set, "Загрузка прервана внутренней ошибкой (см. лог) - повторите")
+            self._after(0, self.set, tr("Загрузка прервана внутренней ошибкой (см. лог) - повторите"))
     def _run_check(self, total):
         """Проверка: determinate-полоса по числу проверенных, живые вверх, кэш по итогам."""
         # погасить indeterminate-анимацию скачивания: её таймер Autoincrement иначе
@@ -455,7 +607,7 @@ class App:
         self.progress.pack(fill="x", padx=8, pady=(0, 2), before=self.listbox)
         p = getattr(self, "_load_prefix", "")
         pre = f"{p}. " if p else ""
-        self.set(f"{pre}Проверка (полный MTProto-хендшейк)...")
+        self.set(tr("{pre}Проверка (полный MTProto-хендшейк)...").format(pre=pre))
         # executor живёт в главном потоке: присвоение self._ex до старта воркера,
         # иначе _on_close в окне между стартом потока и присвоением промахнётся
         self._ex = ThreadPoolExecutor(128)
@@ -481,7 +633,9 @@ class App:
                         alive_n += ok
                         self._after(0, lambda v=done: self.progress.config(value=v))
                         self._after(0, self.refresh,
-                                        f"{load_msg}{' ' if load_msg else ''}Проверено {done}/{total}, живых {alive_n}")
+                                    tr("{load}Проверено {done}/{total}, живых {alive}").format(
+                                        load=f"{load_msg} " if load_msg else "",
+                                        done=done, total=total, alive=alive_n))
                 except RuntimeError:
                     pass  # executor выключен закрытием окна: выходим через finally
                 except cf.CancelledError:
@@ -499,25 +653,29 @@ class App:
                     # перепроверку мёртвого списка, а свежие прокси недостижимы
                     self._fetched_url = "<retry-needed>"
                     self._after(0, self.refresh,
-                                f"Готово: живых 0 из {total}.{tail} Возможно, все источники устарели - "
-                                f"попробуйте позже или свой URL в настройках")
+                                tr("Готово: живых {a} из {b}.{tail} Возможно, все источники устарели - "
+                                   "попробуйте позже или свой URL в настройках")
+                                .format(a=alive_n, b=total, tail=tail))
                 else:
                     self._after(0, self.refresh,
-                                f"Готово: живых {alive_n} из {total}.{tail} Теперь «2. Включить»")
+                                tr("Готово: живых {a} из {b}.{tail} Теперь «2. Включить»")
+                                .format(a=alive_n, b=total, tail=tail))
             else:  # оборвалось исключением: не выдаём проверку за завершённую
                 self._after(0, self.refresh,
-                            f"Проверка прервана на {done}/{total}, живых {alive_n}. Повторите «1. Проверить прокси»")
+                            tr("Проверка прервана на {done}/{total}, живых {alive}. "
+                               "Повторите «1. Проверить прокси»")
+                            .format(done=done, total=total, alive=alive_n))
 
     def enable(self):
         if self.busy:
             return
         if not self.proxies:
-            self.set("Сначала «1. Проверить прокси»")
+            self.set(tr("Сначала «1. Проверить прокси»"))
             return
         # порядок загрузки: первый живой = верхний [живой] в списке, как видит пользователь
         good = [u for u, _, _ in self.proxies if self.status.get(u)]
         if not good:
-            self.set("Нет живых прокси - сначала «1. Проверить прокси»")
+            self.set(tr("Нет живых прокси - сначала «1. Проверить прокси»"))
             return
         self.root.clipboard_clear()
         self.root.clipboard_append("\n".join(good) + "\n")
@@ -534,12 +692,12 @@ class App:
         except Exception:
             opened = False  # на некоторых платформах бросает, а не возвращает False
         if not opened:
-            self.set("Не удалось открыть tg://-ссылку: Telegram не установлен или не ассоциирован. "
-                     "Список живых уже в буфере - вставьте вручную: Настройки -> Данные и память -> "
-                     "Прокси -> Добавить, Ctrl+V.")
+            self.set(tr("Не удалось открыть tg://-ссылку: Telegram не установлен или не ассоциирован. "
+                        "Список живых уже в буфере - вставьте вручную: Настройки -> Данные и память -> "
+                        "Прокси -> Добавить, Ctrl+V."))
             return
-        self.set(f"Живых {len(good)}: первый открыт в Telegram - подтвердите «Включить прокси» "
-                 f"в появившемся диалоге. Весь список уже в буфере.")
+        self.set(tr("Живых {n}: первый открыт в Telegram - подтвердите «Включить прокси» "
+                    "в появившемся диалоге. Весь список уже в буфере.").format(n=len(good)))
 
     def refresh(self, text):
         # батчинг: не чаще раза в 100мс, иначе при 128 потоках список часто мигает
@@ -570,7 +728,7 @@ class App:
         sel_urls = {self.row_urls[i] for i in sel if i < len(self.row_urls)}
         self.row_urls = [p[0] for p, _ in rows]
         for (url, server, port), st in rows:
-            mark = "[живой] " if st else "[ ?    ] "
+            mark = tr("[живой] ") if st else "[ ?    ] "
             self.listbox.insert(END, f"{mark}{server}:{port}")
             if st:
                 self.listbox.itemconfig(END, fg="#1a7f37")
@@ -593,48 +751,81 @@ class App:
             except Exception:
                 opened = False
             if not opened:
-                self.set("Не удалось открыть tg://-ссылку: Telegram не ассоциирован. "
-                         "Ссылка прокси: " + self.row_urls[sel[0]])
+                self.set(tr("Не удалось открыть tg://-ссылку: Telegram не ассоциирован. "
+                            "Ссылка прокси: {url}").format(url=self.row_urls[sel[0]]))
 
     def show_help(self):
         if getattr(self, "_help_win", None) is not None and self._help_win.winfo_exists():
             self._help_win.lift()
             return
         win = self._help_win = Toplevel(self.root)
-        win.title("Справка")
+        win.title(tr("Справка"))
         win.geometry("680x600")
         # ponytail: фиксированное окно. Текст HELP длиннее - нужен скролл,
         # не раздувать окно бесконечно. Перепишешь HELP длиннее - поднимай высоту.
         body = Frame(win)
         body.pack(fill=BOTH, expand=True, padx=12, pady=12)
-        txt = Text(body, wrap="word", borderwidth=0, highlightthickness=0)
+        self._help_text = txt = Text(body, wrap="word", borderwidth=0, highlightthickness=0)
         sb = Scrollbar(body, command=txt.yview)
         txt.config(yscrollcommand=sb.set)
         sb.pack(side=RIGHT, fill="y")
         txt.pack(side=LEFT, fill=BOTH, expand=True)
-        txt.insert("1.0", HELP)
+        txt.insert("1.0", help_text())
         txt.config(state="disabled")  # только чтение
-        Button(win, text="Закрыть", command=win.destroy).pack(pady=(0, 12))
+        self._help_close = Button(win, text=tr("Закрыть"), command=win.destroy)
+        self._help_close.pack(pady=(0, 12))
+
+    def _apply_lang(self, lang):
+        """Выбранный язык применяется сразу: tr() читает глобаль, живые виджеты перетекстуем."""
+        self.lang = lang  # "ru"/"en"; None = Авто: решает локаль системы
+        set_lang(lang or detect_lang())
+        self.btn_load.config(text=tr("1. Проверить прокси"))
+        self.btn_enable.config(text=tr("2. Включить"))
+        self.btn_settings.config(text=tr("Настройки"))
+        self._retext_help()
+        self.refresh(tr(HINT))  # подсказка и метки списка - на новом языке
+        self._do_refresh()
+
+    def _retext_help(self):
+        """Открытая справка переезжает на новый язык; закрытая - не трогаем."""
+        win = getattr(self, "_help_win", None)
+        if win is None or not win.winfo_exists():
+            return
+        win.title(tr("Справка"))
+        txt = self._help_text
+        txt.config(state=NORMAL)
+        txt.delete("1.0", END)
+        txt.insert("1.0", help_text())
+        txt.config(state=DISABLED)
+        self._help_close.config(text=tr("Закрыть"))
 
     def show_settings(self):
         if getattr(self, "_settings_win", None) is not None and self._settings_win.winfo_exists():
             self._settings_win.lift()
             return
         win = self._settings_win = Toplevel(self.root)
-        win.title("Настройки")
-        win.geometry("560x150")
+        win.title(tr("Настройки"))
+        win.geometry("560x220")
         presets_list = "\n".join(f"  {k}: {v}" for k, v in PRESETS.items())
-        Label(win, text="URL списка прокси (формат: t.me/proxy?server=...&port=...&secret=...).\n"
-                        "Пустое поле = обойти все предустановленные источники:\n" + presets_list,
+        Label(win, text=tr("URL списка прокси (формат: t.me/proxy?server=...&port=...&secret=...).\n"
+                           "Пустое поле = обойти все предустановленные источники:\n") + presets_list,
               anchor=W, justify=LEFT, wraplength=530).pack(fill=BOTH, padx=12, pady=(12, 2))
         entry = Entry(win)
         entry.insert(0, self.custom_url or "")
         entry.pack(fill=BOTH, padx=12, pady=4)
+        # язык интерфейса: Авто = поля "lang" в настройках нет, решает локаль системы
+        lang_row = Frame(win)
+        lang_row.pack(fill=BOTH, padx=12)
+        Label(lang_row, text=tr("Язык интерфейса:")).pack(side=LEFT)
+        lang_var = StringVar(value=self.lang or "")
+        for value, label in (("", "Авто"), ("ru", "Русский"), ("en", "English")):
+            Radiobutton(lang_row, text=tr(label), value=value, variable=lang_var).pack(side=LEFT, padx=4)
 
         def save():
+            lang = lang_var.get()  # "" = Авто
             url = entry.get().strip() or None  # пустое поле = все предустановленные
             if url and not url.lower().startswith(("http://", "https://")):
-                self.set("URL должен начинаться с http:// или https:// (или пустое поле = все источники)")
+                self.set(tr("URL должен начинаться с http:// или https:// (или пустое поле = все источники)"))
                 return
             try:
                 # читаем актуальный файл под локом: не затираем кэш, который мог
@@ -645,17 +836,23 @@ class App:
                     s["list_url"] = url
                     if not url:
                         s.pop("list_url")
+                    # Авто = поля нет: язык возьмётся из локали системы
+                    if lang:
+                        s["lang"] = lang
+                    else:
+                        s.pop("lang", None)
                     _write_settings(s)
             except OSError as e:
-                self.set(f"Не удалось сохранить настройки: {e}")
+                self.set(tr("Не удалось сохранить настройки: {e}").format(e=e))
                 return
             self.custom_url = url
+            self._apply_lang(lang or None)
             win.destroy()
-            self.set("Источники: все предустановленные. Нажмите «1. Проверить прокси»." if not url
-                     else f"URL сохранён: {url}. Нажмите «1. Проверить прокси».")
+            self.set(tr("Источники: все предустановленные. Нажмите «1. Проверить прокси».") if not url
+                     else tr("URL сохранён: {url}. Нажмите «1. Проверить прокси».").format(url=url))
 
-        Button(win, text="Сохранить", command=save).pack(side=LEFT, padx=12, pady=8)
-        Button(win, text="Все предустановленные",
+        Button(win, text=tr("Сохранить"), command=save).pack(side=LEFT, padx=12, pady=8)
+        Button(win, text=tr("Все предустановленные"),
                command=lambda: (entry.delete(0, END), entry.insert(0, ""))).pack(side=LEFT, pady=8)
 
 

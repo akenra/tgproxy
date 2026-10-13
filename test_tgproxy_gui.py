@@ -29,6 +29,14 @@ def tk():
     root.destroy()
 
 
+@pytest.fixture(autouse=True)
+def ru_default_lang(monkeypatch):
+    """Язык в тестах по умолчанию русский, независимо от локали машины:
+    автоопределение не должно зависеть от окружения CI."""
+    monkeypatch.setattr(g.locale, "getlocale", lambda *a: ("ru_RU", "cp1251"))
+    g.set_lang("ru")
+
+
 @pytest.fixture()
 def app(tk, tmp_path, monkeypatch):
     """App с SETTINGS на временный файл: кэш-тесты не мусорят друг другу.
@@ -37,6 +45,8 @@ def app(tk, tmp_path, monkeypatch):
     соседние тесты модуля не живут; держим destroy-тесты на отдельных root."""
     import tgproxy_gui as _g
     monkeypatch.setattr(_g, "SETTINGS", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(_g.locale, "getlocale", lambda *a: ("ru_RU", "cp1251"))
+    _g.set_lang("ru")  # тесты ждут русский интерфейс независимо от локали машины
     a = _g.App(tk)
     yield a
     a._closing = True  # рвём _drain-цикл: не копим таймеры на общий module-scoped root
@@ -72,7 +82,11 @@ def wait_done(app, tk, limit=500):
 def click_button(win, text):
     """Нажать кнопку с подписью text в окне win."""
     for child in win.children.values():
-        if getattr(child, "cget", lambda k: "")("text") == text:
+        try:
+            label = child.cget("text")
+        except Exception:  # noqa: BLE001 - у Entry/Frame опции text нет
+            continue
+        if label == text:
             child.invoke()
             return
     raise AssertionError(f"кнопка {text!r} не найдена")
@@ -1365,3 +1379,164 @@ def test_gc_disabled_session_wide():
     """gc выключен на весь сеанс: цикл в фоновом потоке при живом Tcl роняет интерпретатор."""
     import gc as _gc
     assert not _gc.isenabled()
+
+
+# ---------- выбор языка интерфейса ----------
+
+def find_radio(win, text):
+    """Радиокнопка с подписью text в дереве win (лежат внутри Frame настроек)."""
+    for child in win.winfo_children():
+        if isinstance(child, g.Radiobutton):
+            if child.cget("text") == text:
+                return child
+        else:
+            found = find_radio(child, text)
+            if found is not None:
+                return found
+    return None
+
+
+def click_radio(win, text):
+    """Выбрать радиокнопку с подписью text."""
+    rb = find_radio(win, text)
+    assert rb is not None, f"радиокнопка {text!r} не найдена"
+    rb.invoke()
+
+
+def test_en_dictionary_covers_widgets(app):
+    """tr() переводит видимые тексты по словарю; неизвестная строка остаётся русской."""
+    app._apply_lang("en")
+    assert g.tr("1. Проверить прокси") == "1. Check proxies"
+    assert g.tr("Настройки") == "Settings"
+    assert g.tr("строки нет в словаре") == "строки нет в словаре"
+    assert app.btn_load.cget("text") == "1. Check proxies"
+    assert app.btn_enable.cget("text") == "2. Enable"
+    assert app.btn_settings.cget("text") == "Settings"
+    assert app.label.cget("text").startswith('Click "1. Check proxies"')
+    app._apply_lang("ru")
+    assert g.tr("1. Проверить прокси") == "1. Проверить прокси"
+    assert app.label.cget("text").startswith("Нажмите")
+
+
+def test_switch_language_retexts_list_marks(app):
+    """Метки списка и подсказка переезжают на новый язык без перезапуска."""
+    url = u("h", 443)
+    app.proxies = [(url, "h", 443)]
+    app.status = {url: True}
+    app.refresh("")
+    app._do_refresh()
+    assert app.listbox.get(0).startswith("[живой]")
+    app._apply_lang("en")
+    assert app.listbox.get(0).startswith("[alive]")
+    app._apply_lang("ru")
+    assert app.listbox.get(0).startswith("[живой]")
+
+
+def test_help_window_follows_language(app):
+    """Справка: отдельные тексты RU и EN, открытое окно перетекстуется."""
+    assert g.help_text() == g.HELP
+    app.show_help()
+    assert "ЧТО ДЕЛАЕТ ЭТА ПРОГРАММА" in app._help_text.get("1.0", "end")
+    app._apply_lang("en")
+    assert app._help_win.title() == "Help"
+    assert "WHAT THIS PROGRAM DOES" in app._help_text.get("1.0", "end")
+    assert app._help_close.cget("text") == "Close"
+    app._help_win.destroy()
+    app._apply_lang("ru")  # закрытая справка: перетекстовка молчит
+    assert g.help_text() == g.HELP
+
+
+def test_detect_lang_reads_system_locale(monkeypatch):
+    """Авто: ru-локаль - русский, иная - английский, неизвестная и сбой - русский."""
+    monkeypatch.setattr(g.locale, "getlocale", lambda *a: ("ru_RU", "cp1251"))
+    assert g.detect_lang() == "ru"
+    monkeypatch.setattr(g.locale, "getlocale", lambda *a: ("Russian_Russia", "utf8"))
+    assert g.detect_lang() == "ru"
+    monkeypatch.setattr(g.locale, "getlocale", lambda *a: ("en_US", "utf8"))
+    assert g.detect_lang() == "en"
+    monkeypatch.setattr(g.locale, "getlocale", lambda *a: (None, None))
+    assert g.detect_lang() == "ru"
+
+    def broken(*a):
+        raise ValueError("unknown locale: 1")
+
+    monkeypatch.setattr(g.locale, "getlocale", broken)
+    assert g.detect_lang() == "ru"
+
+
+def test_language_from_settings_at_startup(app, tk, tmp_path, monkeypatch):
+    """Поле lang в настройках поднимает интерфейс английским."""
+    p = tmp_path / "lang.json"
+    p.write_text(json.dumps({"lang": "en"}), encoding="utf-8")
+    monkeypatch.setattr(g, "SETTINGS", str(p))
+    app2 = g.App(new_root())
+    try:
+        assert app2.lang == "en"
+        assert app2.btn_load.cget("text") == "1. Check proxies"
+        assert app2.label.cget("text").startswith('Click "1. Check proxies"')
+    finally:
+        app2._on_close()
+
+
+def test_settings_language_switches_saves_and_applies(app, tk):
+    """Переключатель языка: сохраняется в поле lang и применяется сразу."""
+    p = tmp_settings(app)
+    app.show_settings()
+    win = app._settings_win
+    assert win.title() == "Настройки"
+    click_radio(win, "English")
+    click_button(win, "Сохранить")
+    assert app.lang == "en"
+    assert app.btn_load.cget("text") == "1. Check proxies"
+    assert json.loads(p.read_text(encoding="utf-8"))["lang"] == "en"
+    # Авто: поле lang убирается, язык решает локаль (в тестах русская)
+    app.show_settings()
+    assert app._settings_win.title() == "Settings"
+    click_radio(app._settings_win, "Auto")
+    click_button(app._settings_win, "Save")
+    assert app.lang is None
+    assert "lang" not in json.loads(p.read_text(encoding="utf-8"))
+    assert app.btn_load.cget("text") == "1. Проверить прокси"
+
+
+def test_settings_language_auto_uses_locale(app, tk, monkeypatch):
+    """Авто с английской локалью: после сохранения интерфейс английский."""
+    monkeypatch.setattr(g.locale, "getlocale", lambda *a: ("en_GB", "utf8"))
+    app.show_settings()
+    click_radio(app._settings_win, "Авто")
+    click_button(app._settings_win, "Сохранить")
+    assert app.lang is None
+    assert app.btn_load.cget("text") == "1. Check proxies"
+
+
+def test_en_status_template_with_numbers(app, tk, monkeypatch):
+    """EN-шаблоны статусов с числами: счетчики загрузки и итог проверки."""
+    app._apply_lang("en")
+    fresh = [(u("live", 443), "live", 443), (u("dead", 443), "dead", 443)]
+    monkeypatch.setattr(g, "fetch_all", lambda urls: (fresh, 7, [], 2))
+    monkeypatch.setattr(g, "alive", lambda url: "server=live&" in url)
+    app.load_and_check()
+    wait_done(app, tk)
+    pump(tk, 200)
+    text = app.label.cget("text")
+    assert "Loaded 2 proxies" in text
+    assert "duplicates dropped: 2" in text
+    assert "malformed lines: 7" in text
+    assert "Done: 1 of 2 alive" in text
+    assert "2. Enable" in text
+
+
+def test_en_hints_and_clipboard_fallback(app, tk, monkeypatch):
+    """EN-подсказки enable: пустой список, нет живых, буфер при сбое tg://."""
+    app._apply_lang("en")
+    app.enable()
+    assert app.label.cget("text") == 'Click "1. Check proxies" first'
+    url = u("h", 443)
+    app.proxies = [(url, "h", 443)]
+    app.status = {url: False}
+    app.enable()
+    assert app.label.cget("text") == 'No live proxies - click "1. Check proxies" first'
+    app.status = {url: True}
+    monkeypatch.setattr(g.webbrowser, "open", lambda link: False)
+    app.enable()
+    assert "clipboard" in app.label.cget("text")
