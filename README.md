@@ -1,93 +1,97 @@
 # TG Proxy Checker
 
+**English** | [Русский](README.ru.md)
+
 [![tests](https://github.com/akenra/tgproxy/actions/workflows/tests.yml/badge.svg)](https://github.com/akenra/tgproxy/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/akenra/tgproxy)](https://github.com/akenra/tgproxy/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4b5563.svg)](#установка)
+[![platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4b5563.svg)](#installation)
 
-Кроссплатформенная GUI-утилита: качает свежие публичные списки MTProto-прокси, проверяет каждый полным хендшейком (не просто «порт открыт», а реальный ответ Telegram) и кладёт живых в буфер обмена одним списком для вставки в Telegram.
+Cross-platform GUI utility: it downloads fresh public MTProto proxy lists, checks each one with a full handshake (not just "port open", but a real Telegram response) and puts the live ones into the clipboard as a single list to paste into Telegram.
 
-![Скриншот приложения](docs/screenshot.png)
+![Application screenshot](docs/screenshot.png)
 
-## Оглавление
+## Table of contents
 
-- [Почему](#почему)
-- [Безопасность](#безопасность)
-- [Установка](#установка)
-- [Использование](#использование)
-- [Свои списки прокси](#свои-списки-прокси)
-- [Как это работает](#как-это-работает)
-- [Тесты](#тесты)
-- [Сборка](#сборка)
-- [Участие в разработке](#участие-в-разработке)
-- [Лицензия](#лицензия)
+- [Why](#why)
+- [Security](#security)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Custom proxy lists](#custom-proxy-lists)
+- [How it works](#how-it-works)
+- [Tests](#tests)
+- [Build](#build)
+- [Contributing](#contributing)
+- [License](#license)
 
-## Почему
+## Why
 
-Публичные MTProto-прокси живут недолго: свежий список из 500+ адресов через пару дней наполовину мёртв, а перебирать его вручную - бессмысленная работа. Утилита проверяет всё одной кнопкой: полный хендшейк вместо «пинга», сотни адресов параллельно, на выходе - готовый список живых прокси, который Telegram принимает целиком.
+Public MTProto proxies do not live long: a fresh list of 500+ addresses is half dead within a couple of days, and going through it by hand is pointless work. The utility checks everything with one button: a full handshake instead of a "ping", hundreds of addresses in parallel, and the output is a ready list of live proxies that Telegram accepts as a whole.
 
-## Безопасность
+## Security
 
-- Прокси в публичных списках - чужие. Владелец прокси видит метаданные соединения; не используйте такие прокси для чувствительного трафика.
-- Утилита ничего не отправляет, кроме самого хендшейка проверки: без логинов, телеметрии и обращений куда-либо ещё.
-- Рядом с приложением создаются только два файла: кэш прошлой проверки `tgproxy_settings.json` и лог ошибок `tgproxy_error.log` на случай исключений.
+- Proxies in public lists belong to strangers. The proxy owner sees the connection metadata; do not use such proxies for sensitive traffic.
+- The utility sends nothing except the check handshake itself: no logins, no telemetry, no requests anywhere else.
+- Only two files are created next to the application: the cache of the last check `tgproxy_settings.json` and the error log `tgproxy_error.log` for exceptions.
 
-## Установка
+## Installation
 
-### Готовые сборки
+### Prebuilt binaries
 
-Бинари для Windows, macOS и Linux собираются автоматически и лежат в разделе [Releases](https://github.com/akenra/tgproxy/releases). Скачайте файл под свою ОС и запустите - Python не нужен.
+Binaries for Windows, macOS and Linux are built automatically and live in [Releases](https://github.com/akenra/tgproxy/releases). Download the file for your OS and run it, no Python needed.
 
-Windows может показать предупреждение SmartScreen (сборка не подписана): «Подробнее» - «Выполнить в любом случае».
+Windows may show a SmartScreen warning (the build is unsigned): "More info" - "Run anyway".
 
-### Из исходников
+### From source
 
-Нужен Python 3.9+:
+Python 3.9+ is required:
 
 ```
 pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git"
 python tgproxy_gui.py
 ```
 
-## Использование
+## Usage
 
-1. **Проверить прокси**. Если списка ещё нет, приложение качает свежие списки (500+ прокси) и сразу проверяет; прошлые живые из кэша доливаются к свежему списку и перепроверяются. Если список уже показан, кнопка перепроверяет его без скачивания. Цикл обычно занимает 20-40 секунд.
-2. **Включить** копирует живых в буфер одним списком и открывает Telegram. Дальше в Telegram: Настройки - Данные и память - Прокси - Добавить прокси - вставить (Ctrl+V); Telegram распарсит весь список за раз.
-3. Двойной клик по строке открывает одиночную t.me-ссылку конкретного прокси. «?» - справка; «Настройки» - подключение своего списка (см. ниже).
+1. **Check proxies**. If there is no list yet, the app downloads fresh lists (500+ proxies) and checks them right away; previously live proxies from the cache are added to the fresh list and re-checked. If the list is already shown, the button re-checks it without downloading. The cycle usually takes 20-40 seconds.
+2. **Enable** copies the live ones to the clipboard as a single list and opens Telegram. Then in Telegram: Settings - Data and Storage - Proxy - Add proxy - paste (Ctrl+V); Telegram parses the whole list at once.
+3. Double-clicking a row opens the individual t.me link of that proxy. "?" is help; "Settings" lets you plug in your own list (see below).
 
-## Свои списки прокси
+The application interface is currently in Russian.
 
-Если предустановленных источников не хватает, подключите свой список: кнопка «Настройки» - поле «URL списка прокси». После сохранения нажмите «1. Проверить прокси».
+## Custom proxy lists
 
-- Принимается http(s)-адрес файла со списком, например `https://example.com/my_proxies.txt`. Пока URL задан, программа использует только его: предустановленные источники пропускаются. Пустое поле (или кнопка «Все предустановленные») возвращает стандартные источники.
-- Формат файла: прокси-ссылки, разделённые переводами строк или пробелами. Каждая ссылка - того же вида, что в публичных списках: `https://t.me/proxy?server=ХОСТ&port=ПОРТ&secret=СЕКРЕТ`; принимается и `tg://proxy?...` с теми же параметрами. Пример:
+If the built-in sources are not enough, plug in your own list: the "Settings" button - the "Proxy list URL" field. After saving, click "1. Check proxies".
+
+- An http(s) address of a file with a list is accepted, for example `https://example.com/my_proxies.txt`. While a URL is set, the program uses only it: the built-in sources are skipped. An empty field (or the "All built-in" button) restores the standard sources.
+- File format: proxy links separated by newlines or spaces. Each link has the same form as in public lists: `https://t.me/proxy?server=HOST&port=PORT&secret=SECRET`; `tg://proxy?...` with the same parameters is also accepted. Example:
 
 ```
 https://t.me/proxy?server=proxy.example.com&port=443&secret=00000000000000000000000000000000
 tg://proxy?server=1.2.3.4&port=8443&secret=11111111111111111111111111111111
 ```
 
-- Строки не по формату загрузку не ломают: они пропускаются, их число видно в итоговом статусе («некорректных строк: N»). Дубликаты отбрасываются.
-- Ограничения: только http(s) (локальный файл подключить нельзя), размер до 5 МБ, таймаут загрузки 30 секунд.
+- Lines that do not match the format do not break the download: they are skipped, and their number is shown in the final status ("malformed lines: N"). Duplicates are dropped.
+- Limits: http(s) only (a local file cannot be plugged in), size up to 5 MB, download timeout 30 seconds.
 
-## Как это работает
+## How it works
 
-- Проверка двухфазная: быстрый TCP-коннект (2.5 с) отсекает недоступные адреса, у открывших порт идёт полный MTProto-хендшейк. 128 потоков.
-- В списке остаются только живые и непроверенные: мёртвые скрываются, оживший при перепроверке появляется снова.
-- Один файл `tgproxy_gui.py`: stdlib (`tkinter`, `urllib`, `concurrent.futures`) плюс единственная зависимость `mtproxy-checker`. Состояние - кэш последней проверки рядом с приложением.
+- Checking is two-phase: a fast TCP connect (2.5 s) filters out unreachable addresses; those with an open port go through the full MTProto handshake. 128 threads.
+- Only live and unchecked proxies stay in the list: dead ones are hidden, and one that comes back to life reappears on a re-check.
+- A single file `tgproxy_gui.py`: stdlib (`tkinter`, `urllib`, `concurrent.futures`) plus a single dependency `mtproxy-checker`. State is the cache of the last check next to the application.
 
-## Тесты
+## Tests
 
-Покрытие `tgproxy_gui.py` не ниже 95% - правило вшито в `pytest.ini` (`--cov-fail-under=95`), прогон ниже порога падает. Фактическое покрытие - 100% (statement и branch).
+Coverage of `tgproxy_gui.py` is at least 95%, a rule baked into `pytest.ini` (`--cov-fail-under=95`); a run below the threshold fails. Actual coverage is 100% (statement and branch).
 
 ```
 pip install mtproxy-checker pytest pytest-cov
 python -m pytest -q
 ```
 
-## Сборка
+## Build
 
-Локальная сборка одного файла через PyInstaller; собирать на целевой ОС, кросс-компиляции нет:
+Local single-file build via PyInstaller; build on the target OS, there is no cross-compilation:
 
 Windows:
 
@@ -103,12 +107,12 @@ pip install pyinstaller
 pyinstaller --onefile --name tgproxy_gui tgproxy_gui.py
 ```
 
-Готовый бинарь появляется в `dist/`. Релизные сборки выкладываются тегом `vX.Y.Z`.
+The ready binary appears in `dist/`. Release builds are published with a `vX.Y.Z` tag.
 
-## Участие в разработке
+## Contributing
 
-Issues и pull request'ы приветствуются. Перед PR прогоните тесты (`python -m pytest -q`) и оформите коммиты по Conventional Commits - формат сообщений автоматически проверяется в CI; подробности и словарь scope - в [AGENTS.md](AGENTS.md).
+Issues and pull requests are welcome. Before a PR, run the tests (`python -m pytest -q`) and format your commits per Conventional Commits: the message format is checked automatically in CI; details and the scope vocabulary are in [AGENTS.md](AGENTS.md).
 
-## Лицензия
+## License
 
-MIT - см. [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
