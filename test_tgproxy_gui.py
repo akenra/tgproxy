@@ -89,6 +89,7 @@ def test_initial_state(app):
 def test_busy_blocks_buttons(app, tk, monkeypatch):
     monkeypatch.setattr(g, "alive", lambda url: True)  # не ходить в сеть из теста
     app.proxies = [(u("h", 443), "h", 443)]
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     app.status = {app.proxies[0][0]: None}
     app._busy_on()
     assert app.busy is True
@@ -719,6 +720,7 @@ def test_check_zero_alive_suggests_refresh(app, tk, monkeypatch, tmp_path):
     """Проверка с 0 живых предлагает «1. Загрузить» - возможно, список устарел."""
     monkeypatch.setattr(g, "SETTINGS", str(tmp_path / "s.json"))  # не писать кэш в реальный файл
     app.proxies = [(u("x", 443), "x", 443)]
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     monkeypatch.setattr(g, "alive", lambda url: False)
     app.load_and_check()
     wait_done(app, tk)
@@ -1105,6 +1107,7 @@ def test_settings_url_change_forces_refetch(app, tk, monkeypatch, tmp_path):
     monkeypatch.setattr(g, "fetch_all", lambda urls: (fetches.append(urls) or ([(u("h", 443), "h", 443)], 0, [], 0)))
     monkeypatch.setattr(g, "alive", lambda url: True)
     app.proxies = [(u("old", 443), "old", 443)]  # список уже показан
+    app._fetched_url = app.custom_url or ""  # список скачан ранее
     app.status = {u("old", 443): True}
     app.custom_url = "https://example.com/new.txt"
     app.load_and_check()
