@@ -1,0 +1,40 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: tgproxy_gui-windows.exe
+            args: --onefile --windowed --name tgproxy_gui
+          - os: ubuntu-latest
+            artifact: tgproxy_gui-linux
+            args: --onefile --name tgproxy_gui
+          - os: macos-latest
+            artifact: tgproxy_gui-macos
+            args: --onefile --name tgproxy_gui
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git" pyinstaller
+      - run: python -m pytest -q -o addopts=''
+      - run: pyinstaller ${{ matrix.args }} tgproxy_gui.py
+      - name: Rename artifact
+        shell: bash
+        run: |
+          if [ -f dist/tgproxy_gui.exe ]; then mv dist/tgproxy_gui.exe dist/${{ matrix.artifact }};
+          else mv dist/tgproxy_gui dist/${{ matrix.artifact }}; fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact }}
