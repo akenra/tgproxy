@@ -495,7 +495,6 @@ class App:
             # кэш пишем всегда: None фильтруется в save_last_results, частичный прогон
             # не теряет проверенных живых при следующем старте (всё ещё без gc)
             save_last_results(self.status)
-            gc.enable()
             self._after(0, self._busy_off)
             if done == total:
                 tail = f" {load_msg}" if load_msg else ""
@@ -512,6 +511,9 @@ class App:
             else:  # оборвалось исключением: не выдаём проверку за завершённую
                 self._after(0, self.refresh,
                             f"Проверка прервана на {done}/{total}, живых {alive_n}. Повторите «1. Проверить прокси»")
+            # enable в самом конце: всё, что воркер делал в Tcl-фон, уже поставлено в
+            # очередь; gc-цикл после enable не застанет ни одного аллоцирующего вызова
+            gc.enable()
 
     def enable(self):
         if self.busy:
