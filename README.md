@@ -7,9 +7,9 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4b5563.svg)](#installation)
 
-Cross-platform GUI utility: it downloads fresh public MTProto proxy lists, checks each one with a full handshake (not just "port open", but a real Telegram response) and puts the live ones into the clipboard as a single list to paste into Telegram.
+Cross-platform GUI app: it downloads fresh public MTProto proxy lists, checks each one with a full handshake (not just "port open", but a real Telegram response) and puts the live ones into the clipboard as a single list to paste into Telegram.
 
-![Application screenshot](docs/screenshot.png)
+![App screenshot](docs/screenshot-en.png)
 
 ## Table of contents
 
@@ -26,19 +26,19 @@ Cross-platform GUI utility: it downloads fresh public MTProto proxy lists, check
 
 ## Why
 
-Public MTProto proxies do not live long: a fresh list of 500+ addresses is half dead within a couple of days, and going through it by hand is pointless work. The utility checks everything with one button: a full handshake instead of a "ping", hundreds of addresses in parallel, and the output is a ready list of live proxies that Telegram accepts as a whole.
+Public MTProto proxies are short-lived: a fresh list of 500+ addresses is half dead within a couple of days, and going through it by hand is pointless work. The app checks everything with one button: a full handshake instead of a "ping", hundreds of addresses in parallel, and the output is a ready list of live proxies that Telegram accepts as a whole.
 
 ## Security
 
 - Proxies in public lists belong to strangers. The proxy owner sees the connection metadata; do not use such proxies for sensitive traffic.
-- The utility sends nothing except the check handshake itself: no logins, no telemetry, no requests anywhere else.
-- Only two files are created next to the application: the cache of the last check `tgproxy_settings.json` and the error log `tgproxy_error.log` for exceptions.
+- The app sends nothing except the check handshake itself: no logins, no telemetry, no requests anywhere else.
+- Only two files are created next to the app: the cache of the last check `tgproxy_settings.json` and the error log `tgproxy_error.log` for exceptions.
 
 ## Installation
 
 ### Prebuilt binaries
 
-Binaries for Windows, macOS and Linux are built automatically and live in [Releases](https://github.com/akenra/tgproxy/releases). Download the file for your OS and run it, no Python needed.
+Binaries for Windows, macOS and Linux are built automatically and published in [Releases](https://github.com/akenra/tgproxy/releases). Download the file for your OS and run it, no Python needed.
 
 Windows may show a SmartScreen warning (the build is unsigned): "More info" - "Run anyway".
 
@@ -57,13 +57,13 @@ python tgproxy_gui.py
 2. **Enable** copies the live ones to the clipboard as a single list and opens Telegram. Then in Telegram: Settings - Data and Storage - Proxy - Add proxy - paste (Ctrl+V); Telegram parses the whole list at once.
 3. Double-clicking a row opens the individual t.me link of that proxy. "?" is help; "Settings" lets you plug in your own list (see below).
 
-The application interface is currently in Russian.
+The interface supports English and Russian: it follows your system language and can be switched in Settings.
 
 ## Custom proxy lists
 
 If the built-in sources are not enough, plug in your own list: the "Settings" button - the "Proxy list URL" field. After saving, click "1. Check proxies".
 
-- An http(s) address of a file with a list is accepted, for example `https://example.com/my_proxies.txt`. While a URL is set, the program uses only it: the built-in sources are skipped. An empty field (or the "All built-in" button) restores the standard sources.
+- An http(s) address of a file with a list is accepted, for example `https://example.com/my_proxies.txt`. While a URL is set, the app uses only it: the built-in sources are skipped. An empty field (or the "All built-in" button) restores the standard sources.
 - File format: proxy links separated by newlines or spaces. Each link has the same form as in public lists: `https://t.me/proxy?server=HOST&port=PORT&secret=SECRET`; `tg://proxy?...` with the same parameters is also accepted. Example:
 
 ```
@@ -78,7 +78,7 @@ tg://proxy?server=1.2.3.4&port=8443&secret=11111111111111111111111111111111
 
 - Checking is two-phase: a fast TCP connect (2.5 s) filters out unreachable addresses; those with an open port go through the full MTProto handshake. 128 threads.
 - Only live and unchecked proxies stay in the list: dead ones are hidden, and one that comes back to life reappears on a re-check.
-- A single file `tgproxy_gui.py`: stdlib (`tkinter`, `urllib`, `concurrent.futures`) plus a single dependency `mtproxy-checker`. State is the cache of the last check next to the application.
+- A single file `tgproxy_gui.py`: stdlib (`tkinter`, `urllib`, `concurrent.futures`) plus a single dependency `mtproxy-checker`. State is the cache of the last check next to the app.
 
 ## Tests
 
