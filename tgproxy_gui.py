@@ -463,27 +463,24 @@ class App:
         total = len(urls)
         done = alive_n = 0
         load_msg = getattr(self, "_load_prefix", "")  # счётчики загрузки из load_and_check
+        # gc выключен на весь воркер (проверка + сохранение кэша): gc-цикл в
+        # не-main потоке при живом Tcl-мейнлупе роняет интерпретатор (Windows CI
+        # 0x80000003 в ssl/_load_windows_store_certs, Linux abort в Future RLock).
+        # Циклов объекты воркера не создают, refcount уберёт всё при enable.
+        gc.disable()
         try:
             with self._ex:
                 # Python 3.14: map сабмитит лениво - если окно закрыли и executor
                 # уже shutdown, итерация бросит RuntimeError; это штатный выход
                 try:
-                    # gc в потоке воркера при аллокации Future (RLock в __init__)
-                    # роняет интерпретатор на Tcl 8.6/linux: gc осматривает объекты
-                    # чужого потока в момент захвата. Циклов у Future нет, refcount
-                    # уберёт всё сам: gc на время проверки выключаем
-                    gc.disable()
-                    try:
-                        results = self._ex.map(alive, urls)
-                        for url, ok in zip(urls, results):
-                            self.status[url] = ok
-                            done += 1
-                            alive_n += ok
-                            self._after(0, lambda v=done: self.progress.config(value=v))
-                            self._after(0, self.refresh,
-                                            f"{load_msg}{' ' if load_msg else ''}Проверено {done}/{total}, живых {alive_n}")
-                    finally:
-                        gc.enable()
+                    results = self._ex.map(alive, urls)
+                    for url, ok in zip(urls, results):
+                        self.status[url] = ok
+                        done += 1
+                        alive_n += ok
+                        self._after(0, lambda v=done: self.progress.config(value=v))
+                        self._after(0, self.refresh,
+                                        f"{load_msg}{' ' if load_msg else ''}Проверено {done}/{total}, живых {alive_n}")
                 except RuntimeError:
                     pass  # executor выключен закрытием окна: выходим через finally
                 except cf.CancelledError:
@@ -491,8 +488,9 @@ class App:
         finally:
             # без finally исключение в alive() оставило бы кнопки навсегда выключенными.
             # кэш пишем всегда: None фильтруется в save_last_results, частичный прогон
-            # не теряет проверенных живых при следующем старте
+            # не теряет проверенных живых при следующем старте (всё ещё без gc)
             save_last_results(self.status)
+            gc.enable()
             self._after(0, self._busy_off)
             if done == total:
                 tail = f" {load_msg}" if load_msg else ""
