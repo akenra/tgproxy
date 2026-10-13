@@ -3,13 +3,26 @@ name: tests
 on: [push, pull_request]
 
 jobs:
-  tests:
+  coverage:
+    # gate 95% (из pytest.ini) применяется в этой джобе: на Windows нет
+    # Tcl-крэша, который валит linux-прогон без --forked
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git" pytest pytest-cov
+      - run: python -m pytest -q
+  unix:
+    # кроссплатформенность: Tcl 8.6 на linux роняет интерпретатор при gc
+    # в потоках воркера на фоне Tk, поэтому тесты форкаются в отдельные процессы
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git" pytest pytest-cov pytest-forked
+      - run: pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git" pytest pytest-forked
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
-      - run: xvfb-run -a python -m pytest -q --forked -p no:cacheprovider -o addopts=''
+      - run: xvfb-run -a python -m pytest -q --forked -o addopts=''
