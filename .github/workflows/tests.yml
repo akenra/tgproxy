@@ -11,4 +11,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git" pytest pytest-cov
-      - run: python -m pytest -q
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+      - run: xvfb-run -a python -m pytest -q
