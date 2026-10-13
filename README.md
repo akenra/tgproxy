@@ -9,14 +9,8 @@
 Нужен Python 3.9+:
 
 ```
-pip install mtproxy-checker
+pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git"
 python tgproxy_gui.py
-```
-
-Или одной командой:
-
-```
-pip install mtproxy-checker && python tgproxy_gui.py
 ```
 
 ## Как пользоваться
