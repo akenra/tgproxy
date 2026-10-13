@@ -109,7 +109,7 @@ pyinstaller --onefile --name tgproxy_gui tgproxy_gui.py
 
 ## Участие в разработке
 
-Issues и pull request'ы приветствуются. Перед PR прогоните тесты (`python -m pytest -q`) и оформите коммиты по Conventional Commits - формат сообщений автоматически проверяется в CI; подробности и словарь scope - в [AGENTS.md](AGENTS.md).
+Issues и pull request'ы приветствуются. Перед PR прогоните тесты (`python -m pytest -q`) и оформите коммиты по Conventional Commits - формат сообщений автоматически проверяется в CI; подробности и словарь scope - в [AGENTS.md](AGENTS.md). Полное руководство для контрибьюторов - в [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Лицензия
 

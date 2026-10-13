@@ -111,7 +111,7 @@ The ready binary appears in `dist/`. Release builds are published with a `vX.Y.Z
 
 ## Contributing
 
-Issues and pull requests are welcome. Before a PR, run the tests (`python -m pytest -q`) and format your commits per Conventional Commits: the message format is checked automatically in CI; details and the scope vocabulary are in [AGENTS.md](AGENTS.md).
+Issues and pull requests are welcome. Before a PR, run the tests (`python -m pytest -q`) and format your commits per Conventional Commits: the message format is checked automatically in CI; details and the scope vocabulary are in [AGENTS.md](AGENTS.md). The full contributor guide is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
