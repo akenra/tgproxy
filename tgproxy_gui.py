@@ -468,7 +468,11 @@ class App:
                 # Python 3.14: map сабмитит лениво - если окно закрыли и executor
                 # уже shutdown, итерация бросит RuntimeError; это штатный выход
                 try:
+                    # gc в потоке воркера собирает внутренние Future'ы map'а и роняет
+                    # интерпретатор на Tcl 8.6/linux (RLock-объекты при осмотре из
+                    # чужого потока): держим iterator и его хвост живыми до конца
                     results = self._ex.map(alive, urls)
+                    _keepalive = [results]
                     for url, ok in zip(urls, results):
                         self.status[url] = ok
                         done += 1
