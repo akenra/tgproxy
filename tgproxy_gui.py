@@ -12,6 +12,13 @@ from urllib import request as rq, parse as ps
 
 from mtproxy_checker import CheckOptions, check_proxy
 
+# gc выключен на весь сеанс приложения: цикл коллектора в фоновом потоке при живом
+# Tcl роняет интерпретатор (Windows fatal 0x80000003, linux abort; ловили в воркерах
+# проверки и загрузки, включая CI, и в хвостах потоков на unwind). ponytail: циклический
+# мусор за сеанс копится - для сессионной утилиты терпимо; если приложение станет
+# долгоживущим, вернуть gc.enable() на простой, только из главного потока.
+gc.disable()
+
 # Предустановленные источники, обходятся все подряд с дедупликацией.
 # Ключ - короткое имя для настроек/статуса, значение - URL списка.
 PRESETS = {
@@ -379,9 +386,6 @@ class App:
         threading.Thread(target=self._load_and_check, args=(src_url,), daemon=True).start()
 
     def _load_and_check(self, src_url):
-        # gc выключен, как в _check: gc-цикл в не-main потоке при живом Tcl-мейнлупе
-        # роняет интерпретатор (Windows CI 0x80000003 в _log_traceback)
-        gc.disable()
         try:
             urls = {"свой": src_url} if src_url else PRESETS
             try:
@@ -442,9 +446,6 @@ class App:
             _log_traceback()
             self._after(0, self._busy_off)
             self._after(0, self.set, "Загрузка прервана внутренней ошибкой (см. лог) - повторите")
-        finally:
-            gc.enable()
-
     def _run_check(self, total):
         """Проверка: determinate-полоса по числу проверенных, живые вверх, кэш по итогам."""
         # погасить indeterminate-анимацию скачивания: её таймер Autoincrement иначе
@@ -468,11 +469,6 @@ class App:
         total = len(urls)
         done = alive_n = 0
         load_msg = getattr(self, "_load_prefix", "")  # счётчики загрузки из load_and_check
-        # gc выключен на весь воркер (проверка + сохранение кэша): gc-цикл в
-        # не-main потоке при живом Tcl-мейнлупе роняет интерпретатор (Windows CI
-        # 0x80000003 в ssl/_load_windows_store_certs, Linux abort в Future RLock).
-        # Циклов объекты воркера не создают, refcount уберёт всё при enable.
-        gc.disable()
         try:
             with self._ex:
                 # Python 3.14: map сабмитит лениво - если окно закрыли и executor
@@ -511,9 +507,6 @@ class App:
             else:  # оборвалось исключением: не выдаём проверку за завершённую
                 self._after(0, self.refresh,
                             f"Проверка прервана на {done}/{total}, живых {alive_n}. Повторите «1. Проверить прокси»")
-            # enable в самом конце: всё, что воркер делал в Tcl-фон, уже поставлено в
-            # очередь; gc-цикл после enable не застанет ни одного аллоцирующего вызова
-            gc.enable()
 
     def enable(self):
         if self.busy:

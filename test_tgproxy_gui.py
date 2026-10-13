@@ -730,7 +730,6 @@ def test_check_zero_alive_suggests_refresh(app, tk, monkeypatch, tmp_path):
     assert "источники устарели" in text
 
 
-# ---------- регрессии ----------
 
 def test_rerun_clears_stale_load_prefix(app, tk, monkeypatch):
     """Перепроверка без скачивания не показывает старый текст «Загружено N прокси»."""
@@ -837,7 +836,6 @@ def test_rerun_status_no_leading_dot(app, tk, monkeypatch):
     assert not app.label.cget("text").startswith(". ")
 
 
-# ---------- регрессии ----------
 
 def test_settings_write_atomic_no_lost_list_url(app, tk, monkeypatch):
     """Прерванная запись не оставляет обрезанный файл; list_url переживает кэш-запись."""
@@ -879,10 +877,9 @@ def test_merge_cache_dedups_same_proxy_different_spelling(app, tk, monkeypatch):
     assert [pr[0] for pr in app.proxies] == [url_fresh]  # дубль не добавлен
 
 
-# ---------- регрессии ----------
 
 def test_executor_shutdown_on_close_mid_check(tmp_path, monkeypatch):
-    """Закрытие окна посреди проверки не оставляет зомби-процесс:
+    """Закрытие окна посреди проверки не оставляет висящий процесс:
     executor выключается с cancel_futures, невыполненные задачи не гоняются.
     Свой Tk: тест уничтожает окно насовсем, фикстурный root не трогаем."""
     import threading as th
@@ -951,7 +948,6 @@ def test_executor_created_in_main_thread(app, tk, monkeypatch):
     assert app._ex._shutdown is True  # with-блок закрыл
 
 
-# ---------- регрессии ----------
 
 def test_load_worker_catchall_releases_busy(app, tk, monkeypatch):
     """Неожиданное исключение в хвосте _load_and_check не зависает busy."""
@@ -1099,7 +1095,6 @@ def test_refresh_pending_not_stuck_when_after_fails(app, tk, monkeypatch, tmp_pa
     assert app._pending_text == "текст 2"
 
 
-# ---------- регрессии ----------
 
 def test_settings_url_change_forces_refetch(app, tk, monkeypatch, tmp_path):
     """Смена URL в настройках при показанном списке - следующая кнопка качает, не перепроверяет."""
@@ -1363,3 +1358,10 @@ def test_drain_survives_close_mid_tick(app, tk, monkeypatch):
         app._drain()
     except RuntimeError as e:
         raise AssertionError(f"reschedule не защищён: {e}")
+
+
+
+def test_gc_disabled_session_wide():
+    """gc выключен на весь сеанс: цикл в фоновом потоке при живом Tcl роняет интерпретатор."""
+    import gc as _gc
+    assert not _gc.isenabled()
