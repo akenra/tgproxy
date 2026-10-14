@@ -75,9 +75,10 @@ HELP = """ЧТО ДЕЛАЕТ ЭТА ПРОГРАММА
 
 ПРИВАТНОСТЬ
 
-Программа никуда не отправляет ваши данные. Единственный трафик -
-запрос списка по URL из настроек и прямые проверки прокси с вашей
-машины. Это публичные серверы неизвестных владельцев: не
+Программа никуда не отправляет ваши данные. Весь её трафик - запрос
+списка по URL из настроек, прямые проверки прокси с вашей машины и
+проверка обновлений по нажатию кнопки в настройках; никаких фоновых
+обращений. Это публичные серверы неизвестных владельцев: не
 используйте их для чувствительных данных. Владелец прокси видит,
 что вы ходите в Telegram, но не видит содержимое переписки
 (шифрование MTProto с секретом, сквозное до серверов Telegram)."""
@@ -126,9 +127,10 @@ Stored in the file tgproxy_settings.json next to the program.
 
 PRIVACY
 
-The program sends none of your data anywhere. The only traffic is
-the list request to the URL from Settings and direct proxy checks from
-your machine. These are public servers of unknown owners: do not
+The program sends none of your data anywhere. All its traffic is the
+list request to the URL from Settings, direct proxy checks from your
+machine, and the update check started by the button in Settings; no
+background requests. These are public servers of unknown owners: do not
 use them for sensitive data. The proxy owner sees
 that you connect to Telegram, but not the content of your chats
 (MTProto encryption with a secret, end-to-end up to Telegram servers)."""

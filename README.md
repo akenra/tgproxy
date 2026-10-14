@@ -32,7 +32,7 @@ Public MTProto proxies are short-lived: a fresh list of 500+ addresses is half d
 ## Security
 
 - Proxies in public lists belong to strangers. The proxy owner sees the connection metadata; do not use such proxies for sensitive traffic.
-- The app sends nothing except the check handshake itself: no logins, no telemetry, no requests anywhere else.
+- The app sends nothing except the check handshake itself and the update check you run by clicking the button: no logins, no telemetry, no background requests.
 - Only two files are created next to the app: the cache of the last check `tgproxy_settings.json` and the error log `tgproxy_error.log` for exceptions.
 
 ### Verifying builds
