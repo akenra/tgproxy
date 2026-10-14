@@ -488,7 +488,8 @@ def test_settings_save_custom_url(app, tmp_path, monkeypatch):
     entry.insert(0, "https://example.com/list.txt")
     click_button(app._settings_win, "Сохранить")
     assert app.custom_url == "https://example.com/list.txt"
-    assert p.exists() and "example.com" in p.read_text(encoding="utf-8")
+    assert p.exists()
+    assert json.loads(p.read_text(encoding="utf-8"))["list_url"] == "https://example.com/list.txt"
 
 
 def test_settings_save_rejects_non_http(app, tmp_path, monkeypatch):
