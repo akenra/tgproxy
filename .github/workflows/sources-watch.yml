@@ -6,6 +6,9 @@ on:
     - cron: "17 6 * * 1"
   workflow_dispatch:
 
+# параллельные прогоны (расписание + ручной запуск) не гонятся за git push
+concurrency: sources-watch
+
 permissions:
   contents: write
 
