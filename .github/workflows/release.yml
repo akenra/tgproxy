@@ -31,6 +31,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git" pyinstaller
+      # github.ref_name - тег vX.Y.Z; теги пушат только обладатели write на репо,
+      # то есть тот же круг, что и правящие этот workflow: нового вектора нет.
+      - name: Внедрить версию из тега
+        run: python ci/set_version.py ${{ github.ref_name }}
       # тесты этого коммита уже прогнал workflow tests (обе джобы зелёные - условие merge);
       # здесь gc-vs-Tcl крэш windows-runner'а воспроизводится нестабильно - не гоняем
       - run: pyinstaller ${{ matrix.args }} tgproxy_gui.py
@@ -39,6 +43,9 @@ jobs:
         run: |
           if [ -f dist/tgproxy_gui.exe ]; then mv dist/tgproxy_gui.exe dist/${{ matrix.artifact }};
           else mv dist/tgproxy_gui dist/${{ matrix.artifact }}; fi
+      - name: Smoke-тест бинаря (--self-test)
+        shell: bash
+        run: ./dist/${{ matrix.artifact }} --self-test
       - name: Аттестация провенанса сборки
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
