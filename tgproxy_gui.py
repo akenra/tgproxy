@@ -32,6 +32,11 @@ PRESETS = {
 }
 TIMEOUT = 5
 OPTS = CheckOptions(connect_timeout=TIMEOUT, response_timeout=TIMEOUT)
+# Проверка обновлений в настройках: GET к GitHub строго по нажатию кнопки, без ретраев.
+# Стартовых и фоновых запросов нет - обещание «никуда не стучимся без спроса» держим.
+UPDATE_API = "https://api.github.com/repos/akenra/tgproxy/releases/latest"
+RELEASES_URL = "https://github.com/akenra/tgproxy/releases"
+UPDATE_TIMEOUT = 10  # секунд; не успели - «не удалось проверить», повторов нет
 HELP = """ЧТО ДЕЛАЕТ ЭТА ПРОГРАММА
 
 Она помогает подключиться к Telegram через публичный MTProto-прокси:
@@ -200,6 +205,14 @@ EN = {
     "URL сохранён: {url}. Нажмите «1. Проверить прокси».": "URL saved: {url}. Click \"1. Check proxies\".",
     "Сохранить": "Save",
     "Все предустановленные": "All built-in",
+    "Версия: {v}": "Version: {v}",
+    "Проверить обновления": "Check for updates",
+    "Проверка обновлений...": "Checking for updates...",
+    "Доступна версия {tag}": "Version {tag} is available",
+    "Открыть страницу релизов": "Open the releases page",
+    "У вас последняя версия": "You have the latest version",
+    "Не удалось проверить обновления": "Could not check for updates",
+    "Не удалось открыть страницу релизов": "Could not open the releases page",
 }
 
 
@@ -325,6 +338,41 @@ def fetch_all(urls):
                 seen.add(key)
                 proxies.append(p)
     return proxies, bad, fails, dups
+
+
+def _version_tuple(text):
+    """Числовая тройка из строки версии вида vX.Y.Z ("v" в любом регистре,
+    не обязателен). None - любая другая форма (суффиксы вроде -beta, мусор):
+    такие версии считаются «не новее» и проверку не роняют."""
+    m = re.fullmatch(r"[vV]?(\d+)\.(\d+)\.(\d+)", str(text).strip())
+    return tuple(int(p) for p in m.groups()) if m else None
+
+
+def is_newer(tag, current):
+    """tag новее current (сравнение числовыми тройками)? Нераспознанные формы - нет."""
+    a, b = _version_tuple(tag), _version_tuple(current)
+    return a is not None and b is not None and a > b
+
+
+def classify_release(payload):
+    """Тело ответа GitHub Releases -> ("newer", tag) | ("current", None).
+    Чужой payload и мусорный tag_name - это "current": не ошибка проверки."""
+    tag = payload.get("tag_name") if isinstance(payload, dict) else None
+    return ("newer", tag) if is_newer(tag, APP_VERSION) else ("current", None)
+
+
+def check_for_updates():
+    """Один GET к GitHub Releases (только по нажатию кнопки в настройках).
+    Возврат: ("newer", tag) | ("current", None) | ("error", None) - сеть,
+    статус != 200 и битый JSON одинаковы: «не удалось проверить»."""
+    req = rq.Request(UPDATE_API, headers={"User-Agent": f"tgproxy/{APP_VERSION}",
+                                          "Accept": "application/vnd.github+json"})
+    try:
+        with rq.urlopen(req, timeout=UPDATE_TIMEOUT) as r:
+            payload = json.load(r)
+    except Exception:
+        return ("error", None)
+    return classify_release(payload)
 
 
 def load_settings():
@@ -809,7 +857,7 @@ class App:
             return
         win = self._settings_win = Toplevel(self.root)
         win.title(tr("Настройки"))
-        win.geometry("560x220")
+        win.geometry("560x300")
         presets_list = "\n".join(f"  {k}: {v}" for k, v in PRESETS.items())
         Label(win, text=tr("URL списка прокси (формат: t.me/proxy?server=...&port=...&secret=...).\n"
                            "Пустое поле = обойти все предустановленные источники:\n") + presets_list,
@@ -824,6 +872,46 @@ class App:
         lang_var = StringVar(value=self.lang or "")
         for value, label in (("", "Авто"), ("ru", "Русский"), ("en", "English")):
             Radiobutton(lang_row, text=tr(label), value=value, variable=lang_var).pack(side=LEFT, padx=4)
+        # Проверка обновлений: строго по нажатию - ни на старте, ни в фоне запросов нет
+        upd_row = Frame(win)
+        upd_row.pack(fill=BOTH, padx=12, pady=(8, 0))
+        Label(upd_row, text=tr("Версия: {v}").format(v=APP_VERSION)).pack(side=LEFT)
+        upd_status = Label(win, text="", anchor=W, justify=LEFT, wraplength=530)
+        upd_status.pack(fill=BOTH, padx=12, pady=(2, 0))
+
+        def open_releases():
+            try:
+                opened = webbrowser.open(RELEASES_URL)
+            except Exception:
+                opened = False  # часть платформ бросает, а не возвращает False
+            if not opened:
+                upd_status.config(text=tr("Не удалось открыть страницу релизов"))
+
+        def upd_done(kind, tag):
+            if not win.winfo_exists():
+                return  # окно закрыли во время проверки: результат показывать некуда
+            check_btn.config(state=NORMAL)
+            if kind == "newer":
+                upd_status.config(text=tr("Доступна версия {tag}").format(tag=tag))
+                open_btn.pack(side=LEFT, padx=6)
+            else:
+                open_btn.pack_forget()  # прошлое «есть новее» уже неактуально
+                text = (tr("У вас последняя версия") if kind == "current"
+                        else tr("Не удалось проверить обновления"))
+                upd_status.config(text=text)
+
+        def check_updates():
+            """Только по нажатию: запрос уходит в поток, кнопка гаснет до результата,
+            поэтому повторный клик до его прихода невозможен."""
+            check_btn.config(state=DISABLED)
+            open_btn.pack_forget()
+            upd_status.config(text=tr("Проверка обновлений..."))
+            threading.Thread(target=lambda: self._after(0, upd_done, *check_for_updates()),
+                             daemon=True).start()
+
+        check_btn = Button(upd_row, text=tr("Проверить обновления"), command=check_updates)
+        check_btn.pack(side=RIGHT)
+        open_btn = Button(upd_row, text=tr("Открыть страницу релизов"), command=open_releases)
 
         def save():
             lang = lang_var.get()  # "" = Авто
@@ -866,6 +954,9 @@ def selftest():
     assert not valid("https://example.org/")
     assert not valid("https://t.me/proxy?server=x&port=1&secret=short")
     assert not valid("https://t.me/proxy?server=x&port=99999&secret=" + "a" * 32)
+    # проверка обновлений: сравнение версий числовыми тройками, мусор - не новее
+    assert is_newer("v99.9.9", APP_VERSION)
+    assert not is_newer(APP_VERSION, APP_VERSION) and not is_newer("v1.0.6-rc1", APP_VERSION)
 
 
 def run_self_test():

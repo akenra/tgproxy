@@ -155,3 +155,32 @@ def test_dedup_case_insensitive(monkeypatch):
     proxies, bad, fails, dups = g.fetch_all({"src": "http://x/"})
     assert len(proxies) == 1
     assert dups == 1
+
+
+# ---------- проверка обновлений: сравнение версий и классификация ----------
+
+def test_is_newer_numeric_triples():
+    """Сравнение числовыми тройками: новее, равно, старее; 10.0.0 новее 9.9.9."""
+    assert g.is_newer("v1.0.6", "1.0.5")
+    assert g.is_newer("v10.0.0", "9.9.9")
+    assert not g.is_newer("v1.0.5", "1.0.5")
+    assert not g.is_newer("v1.0.4", "1.0.5")
+    assert g.is_newer("V2.0.0", "1.0.5")  # регистр "v" не важен
+
+
+def test_is_newer_junk_is_never_newer():
+    """Суффиксы, мусор и не-строки не роняют сравнение: трактуются как «не новее»."""
+    for tag in ("", "мусор", "v1.0.6-beta", "1.0", "v1.0.5.1", "release-2", None, 5):
+        assert g.is_newer(tag, "1.0.5") is False, tag
+    assert g.is_newer("v9.9.9", "мусор") is False  # нераспознанная текущая тоже
+
+
+def test_classify_release_payloads():
+    """Тело ответа GitHub: мусорный tag_name - это «последняя версия», не ошибка."""
+    assert g.classify_release({"tag_name": "v9.9.9"}) == ("newer", "v9.9.9")
+    assert g.classify_release({"tag_name": "v" + g.APP_VERSION}) == ("current", None)
+    assert g.classify_release({"tag_name": "v0.0.1"}) == ("current", None)
+    assert g.classify_release({"tag_name": "v1.0.6-rc1"}) == ("current", None)
+    assert g.classify_release({}) == ("current", None)
+    assert g.classify_release(None) == ("current", None)
+    assert g.classify_release("не словарь") == ("current", None)

@@ -1,6 +1,6 @@
 """Тесты fetch_all и alive() с подменой сети: urlopen и check_proxy не зовутся по-настоящему."""
 import urllib.parse as ps
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 import tgproxy_gui as g
 
@@ -177,3 +177,58 @@ class _NoopSock:
 
     def __exit__(self, *a):
         return False
+
+
+# ---------- проверка обновлений: сетевой слой под моками urllib ----------
+
+def test_check_for_updates_newer_and_request_shape(monkeypatch):
+    """GET к GitHub Releases: URL, обязательные заголовки и timeout 10 секунд."""
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        seen["url"], seen["timeout"] = req.full_url, timeout
+        seen["headers"] = {k.lower(): v for k, v in req.headers.items()}
+        return FakeResponse('{"tag_name": "v9.9.9"}')
+
+    monkeypatch.setattr(g.rq, "urlopen", fake_urlopen)
+    assert g.check_for_updates() == ("newer", "v9.9.9")
+    assert seen["url"] == "https://api.github.com/repos/akenra/tgproxy/releases/latest"
+    assert seen["timeout"] == 10
+    assert seen["headers"]["user-agent"] == "tgproxy/" + g.APP_VERSION
+    assert seen["headers"]["accept"] == "application/vnd.github+json"
+
+
+def test_check_for_updates_equal_older_and_junk(monkeypatch):
+    """Тот же тег, старее и мусорный tag_name: всё «не новее», без ошибки."""
+    for payload, expected in (
+        ('{"tag_name": "v' + g.APP_VERSION + '"}', ("current", None)),
+        ('{"tag_name": "v0.0.1"}', ("current", None)),
+        ('{"tag_name": "v1.0.6-beta"}', ("current", None)),
+        ('{"tag_name": null}', ("current", None)),
+        ("{}", ("current", None)),
+    ):
+        monkeypatch.setattr(g.rq, "urlopen",
+                            lambda req, timeout, _p=payload: FakeResponse(_p))
+        assert g.check_for_updates() == expected, payload
+
+
+def test_check_for_updates_errors_are_uniform(monkeypatch):
+    """Сеть, статус != 200 и битый JSON - одинаково («error», None); без ретраев."""
+    calls = []
+
+    def net(req, timeout):
+        calls.append(1)
+        raise URLError("сеть недоступна")
+
+    monkeypatch.setattr(g.rq, "urlopen", net)
+    assert g.check_for_updates() == ("error", None)
+    assert calls == [1]
+
+    def status(req, timeout):
+        raise HTTPError(req.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(g.rq, "urlopen", status)
+    assert g.check_for_updates() == ("error", None)
+
+    monkeypatch.setattr(g.rq, "urlopen", lambda req, timeout: FakeResponse("{битый json"))
+    assert g.check_for_updates() == ("error", None)

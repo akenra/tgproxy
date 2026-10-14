@@ -1602,3 +1602,191 @@ def test_en_hints_and_clipboard_fallback(app, tk, monkeypatch):
     monkeypatch.setattr(g.webbrowser, "open", lambda link: False)
     app.enable()
     assert "clipboard" in app.label.cget("text")
+
+
+# ---------- проверка обновлений из настроек ----------
+
+def find_button(win, text):
+    """Кнопка с подписью text в дереве win (кнопки обновлений лежат внутри Frame).
+    Скрытая кнопка релизов после pack_forget остаётся виджетом, но не в менеджере
+    геометрии - её не считаем видимой."""
+    for child in win.winfo_children():
+        if (isinstance(child, g.Button) and child.cget("text") == text
+                and child.winfo_manager()):
+            return child
+        found = find_button(child, text)
+        if found is not None:
+            return found
+    return None
+
+
+def widget_texts(win):
+    """Подписи text всех виджетов дерева win (статусные строки обновлений)."""
+    out = []
+    for child in win.winfo_children():
+        try:
+            out.append(child.cget("text"))
+        except Exception:  # noqa: BLE001 - у Frame/Entry опции text нет
+            pass
+        out.extend(widget_texts(child))
+    return out
+
+
+def test_settings_update_check_thread_locks_button(app, tk, monkeypatch):
+    """Проверка в фоне: кнопка disabled до результата, повторный клик её не запускает."""
+    started, release = threading.Event(), threading.Event()
+    calls, threads = [], []
+
+    def fake_check():
+        calls.append(1)
+        threads.append(threading.current_thread())
+        started.set()
+        release.wait(5)
+        return ("newer", "v9.9.9")
+
+    monkeypatch.setattr(g, "check_for_updates", fake_check)
+    app.show_settings()
+    win = app._settings_win
+    assert calls == []  # открытие окна ничего не шлёт: проверка строго по нажатию
+    btn = find_button(win, "Проверить обновления")
+    assert btn is not None
+    btn.invoke()
+    assert started.wait(5)
+    assert threads[0] is not threading.main_thread()  # запрос не в UI-потоке
+    assert str(btn.cget("state")) == "disabled"
+    assert any("Проверка обновлений..." in t for t in widget_texts(win))
+    btn.invoke()  # disabled: команда не зовётся
+    pump(tk, 100)
+    assert calls == [1]
+    release.set()
+    pump(tk, 400)
+    assert str(btn.cget("state")) == "normal"  # результат доехал через _after
+    assert any("Доступна версия v9.9.9" in t for t in widget_texts(win))
+    assert find_button(win, "Открыть страницу релизов") is not None
+    win.destroy()
+
+
+@pytest.mark.parametrize("result,expected", [
+    (("current", None), "У вас последняя версия"),
+    (("error", None), "Не удалось проверить обновления"),
+])
+def test_settings_update_statuses(app, tk, monkeypatch, result, expected):
+    """Итоги «последняя версия» и «не удалось»: строка результата, кнопки релизов нет."""
+    monkeypatch.setattr(g, "check_for_updates", lambda: result)
+    app.show_settings()
+    win = app._settings_win
+    find_button(win, "Проверить обновления").invoke()
+    pump(tk, 400)
+    assert expected in widget_texts(win)
+    assert find_button(win, "Открыть страницу релизов") is None
+    win.destroy()
+
+
+def test_settings_update_recheck_hides_stale_release_button(app, tk, monkeypatch):
+    """Повторная проверка прячет прошлую кнопку релизов: сразу при старте и по итогу."""
+    monkeypatch.setattr(g, "check_for_updates", lambda: ("newer", "v9.9.9"))
+    app.show_settings()
+    win = app._settings_win
+    btn = find_button(win, "Проверить обновления")
+    btn.invoke()
+    pump(tk, 400)
+    assert find_button(win, "Открыть страницу релизов") is not None
+    release = threading.Event()
+
+    def slow():
+        release.wait(5)
+        return ("current", None)
+
+    monkeypatch.setattr(g, "check_for_updates", slow)
+    btn.invoke()
+    assert find_button(win, "Открыть страницу релизов") is None  # снята на старте проверки
+    release.set()
+    pump(tk, 400)
+    assert "У вас последняя версия" in widget_texts(win)
+    win.destroy()
+
+
+def test_settings_update_open_releases_uses_browser(app, tk, monkeypatch):
+    """Кнопка релизов отдаёт фиксированный URL в webbrowser; сбой браузера - подсказка."""
+    monkeypatch.setattr(g, "check_for_updates", lambda: ("newer", "v9.9.9"))
+    opened = []
+    monkeypatch.setattr(g.webbrowser, "open", lambda url: opened.append(url) or True)
+    app.show_settings()
+    win = app._settings_win
+    find_button(win, "Проверить обновления").invoke()
+    pump(tk, 400)
+    find_button(win, "Открыть страницу релизов").invoke()
+    assert opened == [g.RELEASES_URL]
+    # сбой открытия (False и исключение) одинаково: подсказка, приложение живо
+    monkeypatch.setattr(g.webbrowser, "open", lambda url: False)
+    find_button(win, "Открыть страницу релизов").invoke()
+    assert "Не удалось открыть страницу релизов" in widget_texts(win)
+
+    def boom(url):
+        raise RuntimeError("нет браузера")
+
+    monkeypatch.setattr(g.webbrowser, "open", boom)
+    find_button(win, "Открыть страницу релизов").invoke()  # не должно упасть
+    win.destroy()
+
+
+def test_settings_update_result_after_window_closed_is_safe(app, tk, monkeypatch):
+    """Окно закрыли во время проверки: результат приходит в никуда, приложение живо."""
+    release = threading.Event()
+
+    def slow():
+        release.wait(5)
+        return ("newer", "v9.9.9")
+
+    monkeypatch.setattr(g, "check_for_updates", slow)
+    app.show_settings()
+    find_button(app._settings_win, "Проверить обновления").invoke()
+    app._settings_win.destroy()
+    release.set()
+    pump(tk, 400)  # upd_done по уничтоженному окну: без исключений
+    app.show_settings()  # окно и проверка работают дальше
+    win2 = app._settings_win
+    monkeypatch.setattr(g, "check_for_updates", lambda: ("current", None))
+    find_button(win2, "Проверить обновления").invoke()
+    pump(tk, 400)
+    assert "У вас последняя версия" in widget_texts(win2)
+    win2.destroy()
+
+
+def test_settings_update_no_request_without_click(app, tk, monkeypatch):
+    """Обещание «никуда не стучимся»: без нажатия кнопки сеть и проверка не зовутся."""
+    calls = []
+
+    def bomb(*a, **kw):
+        raise AssertionError("сетевой запрос без нажатия кнопки")
+
+    monkeypatch.setattr(g.rq, "urlopen", bomb)
+    monkeypatch.setattr(g, "check_for_updates", lambda: calls.append(1) or ("current", None))
+    app.show_settings()
+    pump(tk, 200)  # окно открыто: стартовых и фоновых опросов нет
+    assert calls == []
+    win = app._settings_win
+    assert any("Версия: " + g.APP_VERSION in t for t in widget_texts(win))
+    win.destroy()
+
+
+def test_settings_update_strings_en(app, tk, monkeypatch):
+    """Строки проверки обновлений на английском: окно, ход и результат."""
+    g.set_lang("en")
+    assert g.tr("Версия: {v}") == "Version: {v}"
+    assert g.tr("Проверить обновления") == "Check for updates"
+    assert g.tr("Проверка обновлений...") == "Checking for updates..."
+    assert g.tr("Доступна версия {tag}") == "Version {tag} is available"
+    assert g.tr("Открыть страницу релизов") == "Open the releases page"
+    assert g.tr("У вас последняя версия") == "You have the latest version"
+    assert g.tr("Не удалось проверить обновления") == "Could not check for updates"
+    assert g.tr("Не удалось открыть страницу релизов") == "Could not open the releases page"
+    monkeypatch.setattr(g, "check_for_updates", lambda: ("newer", "v9.9.9"))
+    app.show_settings()
+    win = app._settings_win
+    assert any("Version: " + g.APP_VERSION in t for t in widget_texts(win))
+    find_button(win, "Check for updates").invoke()
+    pump(tk, 400)
+    assert "Version v9.9.9 is available" in widget_texts(win)
+    assert find_button(win, "Open the releases page") is not None
+    win.destroy()
