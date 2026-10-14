@@ -232,3 +232,13 @@ def test_check_for_updates_errors_are_uniform(monkeypatch):
 
     monkeypatch.setattr(g.rq, "urlopen", lambda req, timeout: FakeResponse("{битый json"))
     assert g.check_for_updates() == ("error", None)
+
+
+def test_check_for_updates_request_construction_failure(monkeypatch):
+    """Сбой построения Request (правка UPDATE_API, экзотическое окружение) - тоже
+    («error», None): поток-воркер не умирает, кнопка не залипает в disabled."""
+    def boom(*a, **kw):
+        raise ValueError("битый URL")
+
+    monkeypatch.setattr(g.rq, "Request", boom)
+    assert g.check_for_updates() == ("error", None)

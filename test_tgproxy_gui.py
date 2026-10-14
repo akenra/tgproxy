@@ -7,6 +7,8 @@ alive() подменяется заглушкой через monkeypatch, пот
 Пропуск без дисплея: тесты сами скипаются, если Tk не стартует (CI без X).
 """
 import json
+import pathlib
+import subprocess
 import threading
 import sys
 import time
@@ -657,7 +659,42 @@ def test_load_settings_non_str_value(tmp_path, monkeypatch):
 # ---------- selftest как часть пакета ----------
 
 def test_selftest_smoke():
-    g.selftest()  # встроенные assert'ы не должны расходиться с pytest-пакетом
+    g.selftest()  # встроенные проверки не должны расходиться с pytest-пакетом
+
+
+def test_selftest_failure_raises_with_message(monkeypatch):
+    """Сбой встроенной проверки - AssertionError с описанием, а не голый assert."""
+    monkeypatch.setattr(g, "valid", lambda line: False)
+    with pytest.raises(AssertionError, match="валидная ссылка"):
+        g.selftest()
+
+
+def test_run_self_test_dedup_failure_returns_1(monkeypatch):
+    """Сбой проверки _dedup_key в run_self_test - код 1, наружу ничего не летит."""
+    monkeypatch.setattr(g, "_dedup_key", lambda *a: ("сломанный",))
+    assert g.run_self_test() == 1
+
+
+# ---------- самопроверка под python -O: проверки не вырождаются ----------
+
+APP_FILE = pathlib.Path(g.__file__).resolve()
+
+
+def test_self_test_under_dash_o_exits_0():
+    """python -O tgproxy_gui.py --self-test: проверки целы, контракт - код 0."""
+    proc = subprocess.run([sys.executable, "-O", str(APP_FILE), "--self-test"],
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_selftest_stays_alive_under_dash_o():
+    """-O вырезает assert-ы: подменённая проверка обязана дать код 1, не выродиться в 0."""
+    code = ("import tgproxy_gui as g\n"
+            "g.valid = lambda line: False\n"
+            "raise SystemExit(g.run_self_test())\n")
+    proc = subprocess.run([sys.executable, "-O", "-c", code], cwd=str(APP_FILE.parent),
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
 
 
 # ---------- флаги командной строки: --version и --self-test ----------
@@ -1722,11 +1759,21 @@ def test_settings_update_open_releases_uses_browser(app, tk, monkeypatch):
     find_button(win, "Открыть страницу релизов").invoke()
     assert "Не удалось открыть страницу релизов" in widget_texts(win)
 
+    # исключение из webbrowser.open: свежее окно и статус без подсказки, поэтому
+    # проверка ловит именно ветку обработки исключения, а не хвост прошлого кейса
+    win.destroy()
+    app.show_settings()
+    win = app._settings_win
+    find_button(win, "Проверить обновления").invoke()
+    pump(tk, 400)
+    assert any("Доступна версия v9.9.9" in t for t in widget_texts(win))
+
     def boom(url):
         raise RuntimeError("нет браузера")
 
     monkeypatch.setattr(g.webbrowser, "open", boom)
     find_button(win, "Открыть страницу релизов").invoke()  # не должно упасть
+    assert "Не удалось открыть страницу релизов" in widget_texts(win)
     win.destroy()
 
 

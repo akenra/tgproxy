@@ -363,11 +363,11 @@ def classify_release(payload):
 
 def check_for_updates():
     """Один GET к GitHub Releases (только по нажатию кнопки в настройках).
-    Возврат: ("newer", tag) | ("current", None) | ("error", None) - сеть,
-    статус != 200 и битый JSON одинаковы: «не удалось проверить»."""
-    req = rq.Request(UPDATE_API, headers={"User-Agent": f"tgproxy/{APP_VERSION}",
-                                          "Accept": "application/vnd.github+json"})
+    Возврат: ("newer", tag) | ("current", None) | ("error", None) - построение
+    Request, сеть, статус != 200 и битый JSON одинаковы: «не удалось проверить»."""
     try:
+        req = rq.Request(UPDATE_API, headers={"User-Agent": f"tgproxy/{APP_VERSION}",
+                                              "Accept": "application/vnd.github+json"})
         with rq.urlopen(req, timeout=UPDATE_TIMEOUT) as r:
             payload = json.load(r)
     except Exception:
@@ -949,14 +949,27 @@ class App:
 
 
 def selftest():
+    """Встроенные проверки ядра. Здесь не assert-ы: под python -O они вырезаются,
+    и самопроверка (включая smoke релизной сборки) молча выродилась бы в 0."""
     good = "https://t.me/proxy?server=x.y.info.&port=7799&secret=" + "a" * 32
-    assert valid(good) and parse(good)[1:] == ("x.y.info", 7799)
-    assert not valid("https://example.org/")
-    assert not valid("https://t.me/proxy?server=x&port=1&secret=short")
-    assert not valid("https://t.me/proxy?server=x&port=99999&secret=" + "a" * 32)
-    # проверка обновлений: сравнение версий числовыми тройками, мусор - не новее
-    assert is_newer("v99.9.9", APP_VERSION)
-    assert not is_newer(APP_VERSION, APP_VERSION) and not is_newer("v1.0.6-rc1", APP_VERSION)
+    checks = [
+        (valid(good) and parse(good)[1:] == ("x.y.info", 7799),
+         "валидная ссылка не распознана (valid/parse)"),
+        (not valid("https://example.org/"),
+         "ссылка без параметров прокси прошла валидацию"),
+        (not valid("https://t.me/proxy?server=x&port=1&secret=short"),
+         "слишком короткий секрет прошёл валидацию"),
+        (not valid("https://t.me/proxy?server=x&port=99999&secret=" + "a" * 32),
+         "порт вне 0..65535 прошёл валидацию"),
+        # проверка обновлений: сравнение версий числовыми тройками, мусор - не новее
+        (is_newer("v99.9.9", APP_VERSION),
+         "версия v99.9.9 не признана новее " + APP_VERSION),
+        (not is_newer(APP_VERSION, APP_VERSION) and not is_newer("v1.0.6-rc1", APP_VERSION),
+         "равенство или суффиксный тег признаны новее"),
+    ]
+    for ok, failure in checks:
+        if not ok:
+            raise AssertionError("самопроверка: " + failure)
 
 
 def run_self_test():
@@ -967,7 +980,9 @@ def run_self_test():
         import tkinter  # noqa: F401 - GUI-тулкит обязан попасть в сборку
         import mtproxy_checker  # noqa: F401 - единственная внешняя зависимость
         selftest()
-        assert _dedup_key("HOST.Example.", 443, "AB" * 16) == ("host.example", 443, "ab" * 16)
+        # не assert: под python -O он вырезан, и проверка не исполнилась бы вовсе
+        if _dedup_key("HOST.Example.", 443, "AB" * 16) != ("host.example", 443, "ab" * 16):
+            raise AssertionError("самопроверка: _dedup_key искажает хост или hex-секрет")
         return 0
     except Exception:
         return 1
