@@ -5,7 +5,8 @@
 Запуск:  python ci/check_commit_messages.py <range>
 где <range> - git-диапазон, например base..head, before..sha или HEAD~5..HEAD.
 Нулевой before (пуш нового бранча) или пустой аргумент: проверяется только
-последний коммит. Merge-коммиты не проверяются.
+последний коммит. Недоступный before (force-push) - тоже только кончик пуша,
+но с пометкой. Merge-коммиты не проверяются.
 """
 import re
 import subprocess
@@ -15,6 +16,14 @@ TYPES = ("feat", "fix", "docs", "style", "refactor", "perf", "test", "build",
          "ci", "chore", "revert")
 RX = re.compile(r"^(%s)(\([a-z0-9-]+\))?!?: \S" % "|".join(TYPES))
 ZERO = "0" * 40
+NOTE_BEFORE_MISSING = ("before недоступен в клоне (вероятно force-push): "
+                       "проверен только последний коммит")
+
+
+def resolves(rev):
+    """Резолвится ли ревизия в коммит локально: после force-push before исчезает."""
+    return subprocess.run(["git", "rev-parse", "--verify", "--quiet", rev + "^{commit}"],
+                          capture_output=True).returncode == 0
 
 
 def main():
@@ -22,8 +31,14 @@ def main():
     if not rng:
         rng = "HEAD^!"
     else:
-        frm, _, to = rng.partition("..")
+        frm, sep, to = rng.partition("..")
         if frm == ZERO:
+            rng = to + "^!"
+        elif sep and frm and not resolves(frm):
+            # before не добрался до клона: проверяем кончик пуша.
+            # Потолок компромисса: переписанные коммиты старше кончика не
+            # проверяются; расширять - при появлении реального кейса.
+            print(NOTE_BEFORE_MISSING)
             rng = to + "^!"
 
     out = subprocess.run(["git", "log", "--no-merges", "--format=%h%x09%s", rng],
