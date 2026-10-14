@@ -112,11 +112,11 @@ def test_presets_pinned():
 
 
 def test_fetch_all_accepts_tg_links(monkeypatch):
-    """tg://-ссылки реальных форматов (hex64 ee/dd, base64 с %3D) - валидные, не битые."""
+    """tg://-ссылки форм, принимаемых TDLib (ee+домен, dd17, base64 с %3D) - валидные, не битые."""
     lines = [
         "tg://proxy?server=ee.example.com&port=443&secret=" + "ee" + "a" * 62,
-        "tg://proxy?server=dd.example.com&port=8443&secret=" + "dd" + "b" * 62,
-        "tg://proxy?server=b64.example.com&port=2053&secret=AbCdEfGhIjKlMnOpQrStUvx%3D",
+        "tg://proxy?server=dd.example.com&port=8443&secret=" + "dd" + "b" * 32,
+        "tg://proxy?server=b64.example.com&port=2053&secret=MDEyMzQ1Njc4OWFiY2RlZg%3D%3D",
     ]
     monkeypatch.setattr(g.rq, "urlopen", lambda req, timeout: FakeResponse("\n".join(lines)))
     proxies, bad, fails, dups = g.fetch_all({"tg": "http://x/"})

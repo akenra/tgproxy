@@ -270,6 +270,26 @@ def _dedup_key(server, port, secret):
     return (server.lower().rstrip("."), port, s)
 
 
+def tdlib_secret_ok(secret):
+    """Секрет примет TDLib: зеркало ProxySecret::from_link/from_binary (td/mtproto/ProxySecret.cpp).
+    Декод hex (чётная длина) - base64url - base64; 16 байт, или 17 с 0xdd, или >=18 с 0xee, максимум 199."""
+    b = None
+    if len(secret) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", secret):
+        # hex приоритетен: "A"*22 - это 11 байт, а не 16 после base64-декода
+        b = bytes.fromhex(secret)
+    else:
+        try:
+            # altchars: base64url-алфавит вместе с обычным; validate: мусорные символы - не секрет
+            b = base64.b64decode(secret + "=" * (-len(secret) % 4),
+                                 altchars=b"-_", validate=True)
+        except Exception:
+            b = None
+    if b is None:
+        return False
+    return (len(b) <= 199
+            and (len(b) == 16 or (len(b) == 17 and b[0] == 0xDD) or (len(b) >= 18 and b[0] == 0xEE)))
+
+
 def valid(line):
     """Строка - прокси-ссылка ожидаемого формата (server+port+secret)."""
     try:
@@ -277,21 +297,10 @@ def valid(line):
         secret = ps.parse_qs(ps.urlparse(line.strip()).query)["secret"][0]
         if not (0 < port < 65536) or not server:
             return False
-        # Формат секрета (спека MTProto):
-        # 1) hex 32 (16 байт, простой) или hex 64 (dd/ee-префикс faketls);
-        # 2) base64url-написание: TG принимает и его, минимум 12 байт после декода
-        #    (живые dd-секреты вроде dd10400103324995 дают ровно 12).
-        # Формат != живость: мусорный, но декодируемый секрет отсеет alive(), не valid().
-        if re.fullmatch(r"[0-9a-fA-F]{32}|[0-9a-fA-F]{64}", secret):
-            return True
-        # нечётная длина из hex-символов это битый hex, а не base64
-        if re.fullmatch(r"[0-9a-fA-F]+", secret) and len(secret) % 2:
-            return False
-        pad = "=" * (-len(secret) % 4)
-        try:
-            return len(base64.urlsafe_b64decode(secret + pad)) >= 12
-        except Exception:
-            return False
+        # Формат секрета - ровно тот, что примет TDLib (tdlib_secret_ok): мягкое
+        # правило пускало в буфер ссылки, которые TDLib молча отвергает.
+        # Формат != живость: недостижимый прокси все равно отсеет alive().
+        return tdlib_secret_ok(secret)
     except Exception:
         return False
 
@@ -732,8 +741,11 @@ class App:
         if not self.proxies:
             self.set(tr("Сначала «1. Проверить прокси»"))
             return
-        # порядок загрузки: первый живой = верхний [живой] в списке, как видит пользователь
-        good = [u for u, _, _ in self.proxies if self.status.get(u)]
+        # порядок загрузки: первый живой = верхний [живой] в списке, как видит пользователь.
+        # формат секрета фильтруем и тут: в кэше могли остаться прокси, принятые
+        # мягким правилом до этого фильтра, - TDLib такие ссылки молча отвергает
+        good = [u for u, _, _ in self.proxies if self.status.get(u)
+                and tdlib_secret_ok(ps.parse_qs(ps.urlparse(u).query).get("secret", [""])[0])]
         if not good:
             self.set(tr("Нет живых прокси - сначала «1. Проверить прокси»"))
             return

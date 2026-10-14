@@ -274,6 +274,30 @@ def test_enable_webbrowser_exception_falls_back(app, tk, monkeypatch):
     assert "буфере" in app.label.cget("text") or "Не удалось" in app.label.cget("text")
 
 
+def test_enable_skips_tdlib_incompatible_secret(app, tk, monkeypatch):
+    """Живой по статусу прокси с секретом, который TDLib не примет, не уходит
+    ни в буфер, ни первым в tg://: в кэше он мог появиться до этого фильтра."""
+    bad, good = u("bad", 443, "A" * 22), u("good", 443)
+    app.proxies = [(bad, "bad", 443), (good, "good", 443)]
+    app.status = {bad: True, good: True}
+    opened = []
+    monkeypatch.setattr(g.webbrowser, "open", lambda x: opened.append(x) or True)
+    app.enable()
+    pump(tk, 50)
+    clip = tk.clipboard_get()
+    assert bad not in clip and good in clip
+    assert len(opened) == 1 and "server=good" in opened[0]
+
+
+def test_enable_all_alive_secrets_rejected_hints(app, tk):
+    """Фильтр формата снял всех живых - существующая подсказка «Нет живых прокси»."""
+    bad = u("bad", 443, "A" * 22)
+    app.proxies = [(bad, "bad", 443)]
+    app.status = {bad: True}
+    app.enable()
+    assert "Нет живых" in app.label.cget("text")
+
+
 # ---------- settings ----------
 
 def test_load_settings_corrupted_json(tmp_path, monkeypatch):

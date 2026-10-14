@@ -3,6 +3,7 @@
 Сеть не трогаем: fetch покрыт через parse+valid на живых строках-примерах.
 Запуск: python -m pytest test_tgproxy.py -q
 """
+import base64
 import urllib.parse as ps
 
 import tgproxy_gui as g
@@ -13,9 +14,24 @@ def u(server, port, secret):
 
 
 HEX32 = "a" * 32
-HEX64 = "dd" + "b" * 62  # dd-префикс + hex, итого 64
-B64 = "eeNEgYdJvXrFGRMCIMJdCQ"  # реальный пример из живого списка (faketls ee)
-B64DD = "dd10400103324995"  # dd в base64-написании, живой список
+B64 = "eeNEgYdJvXrFGRMCIMJdCQ"  # реальный пример из живого списка: 16 байт после декода
+B64DD = "dd10400103324995"  # hex-строка из живого списка: TDLib читает её как hex, 8 байт
+
+
+def b64url(data):
+    """base64url-написание секрета, как в ссылках t.me."""
+    return base64.urlsafe_b64encode(data).decode()
+
+
+# 6 реальных форм отказа из замера живого списка: TDLib такие секреты не принимает
+BAD_SECRETS = [
+    "eefb47a1320fa86adfa6e63b425154ce1b",  # 34 hex: ee без домена (17 байт)
+    "7nnnAQIAAQAH8AMDhuJMOt0=",  # base64: те же 17 байт ee (в ссылке = уходит как %3D)
+    "YyEEgYdJXfrFmgMCIMJdjjRueWVrdGFuZXQA",  # base64url: 27 байт, первый байт 0x63
+    b64url(bytes([0x6a]) + bytes(21)),  # 22 байта, первый байт 0x6a
+    b64url(bytes([0x10]) + b"x" * 180),  # 181 байт, первый байт 0x10
+    "A" * 22,  # hex чётной длины: 11 байт, а не 16 после base64-декода
+]
 
 
 # ---------- parse ----------
@@ -53,39 +69,69 @@ def test_valid_non_numeric_port():
     assert not g.valid(u("x", "abc", HEX32))
 
 
-# ---------- valid: секрет hex ----------
+# ---------- tdlib_secret_ok: зеркало TDLib ProxySecret ----------
+
+def test_tdlib_secret_ok_accepts_tdlib_forms():
+    """plain16, 16 байт с dd/ee (правило 16 байт сильнее префикса), dd17,
+    ee+домен в hex и base64url, граница ровно 199 байт."""
+    assert g.tdlib_secret_ok(HEX32)
+    assert g.tdlib_secret_ok("AA" * 16)  # регистр hex не важен
+    assert g.tdlib_secret_ok("dd" + "c" * 30)
+    assert g.tdlib_secret_ok("ee" + "c" * 30)
+    assert g.tdlib_secret_ok("dd" + "c" * 32)  # 17 байт: dd-форма
+    assert g.tdlib_secret_ok("ee" + "ab" * 90)  # ee + домен, hex
+    assert g.tdlib_secret_ok(b64url(bytes([0xee]) + bytes(16) + b"example.com"))
+    assert g.tdlib_secret_ok(b64url(bytes([0xee]) + bytes(198)))  # 199 байт: граница
+
+
+def test_tdlib_secret_ok_rejects_live_bad_forms():
+    """6 форм, отвергнутых на живом списке: TDLib такие секреты не принимает."""
+    for secret in BAD_SECRETS:
+        assert not g.tdlib_secret_ok(secret), secret
+
+
+def test_tdlib_secret_ok_rejects_other_shapes():
+    assert not g.tdlib_secret_ok("")  # пусто
+    assert not g.tdlib_secret_ok("####")  # не декодируется ни одним способом
+    assert not g.tdlib_secret_ok("a" * 30)  # 15 байт: короче 16
+    assert not g.tdlib_secret_ok("ee" + "00" * 199)  # 200 байт: длиннее 199
+    assert not g.tdlib_secret_ok(b64url(bytes([0xee]) + bytes(199)))  # то же в base64url
+
+
+# ---------- valid: секрет ----------
 
 def test_valid_hex32():
     assert g.valid(u("x", 443, HEX32))
 
 
-def test_valid_hex64_with_prefix():
-    assert g.valid(u("x", 443, HEX64))
+def test_valid_prefixed_hex_forms():
+    """Живые формы: 16 байт с dd/ee в первом байте, dd17, ee+домен."""
+    assert g.valid(u("x", 443, "dd" + "c" * 30))
+    assert g.valid(u("x", 443, "ee" + "c" * 30))
+    assert g.valid(u("x", 443, "dd" + "c" * 32))
+    assert g.valid(u("x", 443, "ee" + "ab" * 90))
 
 
 def test_valid_hex_wrong_length():
-    # нечётная длина из hex-символов это битый hex, не base64
+    # нечётная длина из hex-символов это битый hex, не base64:
+    # как в TDLib, декодируем base64-ветками исходную строку
     assert not g.valid(u("x", 443, "a" * 31))
     assert not g.valid(u("x", 443, "a" * 33))
 
 
-def test_valid_hex_non_hex_chars():
-    # 'z'*32 декодится как base64url (24 байта): формат допустим, живость решит alive()
-    assert g.valid(u("x", 443, "z" * 32))
-
-
-# ---------- valid: секрет base64url ----------
-
-def test_valid_base64url_live_samples():
-    # реальные строки из публичного списка, раньше отсекались hex-only правилом
+def test_valid_base64url_live_sample():
+    # реальная строка из публичного списка: base64url, 16 байт после декода
     assert g.valid(u("good.cipservice.co.uk", 2083, B64))
-    assert g.valid(u("bookmook.hichibehichi-co.info.", 2882, B64DD))
 
 
-def test_valid_base64url_min_bytes():
-    assert g.valid(u("x", 443, "d" * 22))  # 16 байт после декода
-    assert not g.valid(u("x", 443, "d" * 11))  # 8 байт: слишком короткий
-    assert g.valid(u("x", 443, "dd10400103324995"))  # 12 байт, живой dd-секрет из списка
+def test_valid_rejects_tdlib_incompatible_secret():
+    """Регресс: мягкое правило пропускало эти секреты в буфер, а TDLib их отвергает."""
+    assert not g.valid(u("x", 443, "A" * 22))  # hex чётной длины: 11 байт, не base64
+    assert not g.valid(u("x", 443, "dd" + "b" * 62))  # 32 байта с dd: dd только ровно на 17
+    assert not g.valid(u("x", 443, "z" * 32))  # base64url: 24 байта, первый байт 0xcf
+    assert not g.valid(u("x", 443, BAD_SECRETS[0]))
+    assert not g.valid(u("x", 443, BAD_SECRETS[1].replace("=", "%3D")))  # = в ссылке как %3D
+    assert not g.valid(u("bookmook.hichibehichi-co.info.", 2882, B64DD))
 
 
 def test_valid_base64url_garbage_rejected():
