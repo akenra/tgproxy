@@ -12,6 +12,10 @@ from urllib import request as rq, parse as ps
 
 from mtproxy_checker import CheckOptions, check_proxy
 
+# Версия приложения: одна точка в коде; релизная сборка правит её значением
+# из тега (шаг ci/set_version.py в release workflow, до pyinstaller).
+APP_VERSION = "1.0.5"
+
 # gc выключен на весь сеанс приложения: цикл коллектора в фоновом потоке при живом
 # Tcl роняет интерпретатор (Windows fatal 0x80000003, linux abort; ловили в воркерах
 # проверки и загрузки, включая CI, и в хвостах потоков на unwind). ponytail: циклический
@@ -864,7 +868,30 @@ def selftest():
     assert not valid("https://t.me/proxy?server=x&port=99999&secret=" + "a" * 32)
 
 
-if __name__ == "__main__":  # pragma: no cover - исполняется только запуском exe
+def run_self_test():
+    """Самопроверка (--self-test) для smoke-шага релизной сборки: без сети и
+    без окна Tk, контракт - код возврата (0 - ок, 1 - любой сбой). Исключения
+    наружу не выпускаются: трейсбек-диалог windowed-сборки подвесил бы CI."""
+    try:
+        import tkinter  # noqa: F401 - GUI-тулкит обязан попасть в сборку
+        import mtproxy_checker  # noqa: F401 - единственная внешняя зависимость
+        selftest()
+        assert _dedup_key("HOST.Example.", 443, "AB" * 16) == ("host.example", 443, "ab" * 16)
+        return 0
+    except Exception:
+        return 1
+
+
+def main(argv=None):
+    """Точка входа: --version печатает версию, --self-test гоняет самопроверку;
+    любое прочее (включая незнакомые аргументы) - обычный запуск GUI."""
+    args = sys.argv[1:] if argv is None else list(argv)
+    if "--version" in args:
+        if sys.stdout is not None:  # windowed-сборка: печатать некуда, но не падать
+            print(f"tgproxy {APP_VERSION}")
+        return 0
+    if "--self-test" in args:
+        return run_self_test()
     selftest()
     root = Tk()
     App(root)
@@ -872,3 +899,7 @@ if __name__ == "__main__":  # pragma: no cover - исполняется толь
     # воркеры alive() не-daemon: интерпретатор джойнит их до 8с после смерти окна,
     # пользователь видит «приложение не закрылось». State уже сохранён под локом.
     os._exit(0)
+
+
+if __name__ == "__main__":  # pragma: no cover - исполняется только запуском exe
+    sys.exit(main())

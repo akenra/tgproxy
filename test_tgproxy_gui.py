@@ -660,6 +660,66 @@ def test_selftest_smoke():
     g.selftest()  # встроенные assert'ы не должны расходиться с pytest-пакетом
 
 
+# ---------- флаги командной строки: --version и --self-test ----------
+
+def test_main_version_prints_and_returns_0(capsys):
+    """--version печатает 'tgproxy <версия>' и возвращает 0."""
+    assert g.main(["--version"]) == 0
+    assert capsys.readouterr().out == "tgproxy %s\n" % g.APP_VERSION
+
+
+def test_main_reads_sys_argv_when_none(capsys, monkeypatch):
+    """argv=None (реальный запуск): аргументы берутся из sys.argv."""
+    monkeypatch.setattr(sys, "argv", ["tgproxy_gui.py", "--version"])
+    assert g.main() == 0
+    assert capsys.readouterr().out == "tgproxy %s\n" % g.APP_VERSION
+
+
+def test_main_version_without_stdout_is_safe(monkeypatch):
+    """windowed-сборка: sys.stdout is None - --version не падает и даёт 0."""
+    monkeypatch.setattr(g.sys, "stdout", None)
+    assert g.main(["--version"]) == 0
+
+
+def test_main_self_test_ok():
+    """--self-test: самопроверка проходит, контракт - код возврата 0."""
+    assert g.main(["--self-test"]) == 0
+
+
+def test_main_self_test_failure_returns_1(monkeypatch):
+    """Сбой проверки (подменённая valid() бросает) - код 1, без исключения наружу."""
+    def boom(line):
+        raise RuntimeError("подменённая проверка")
+    monkeypatch.setattr(g, "valid", boom)
+    assert g.main(["--self-test"]) == 1
+
+
+def test_main_self_test_creates_no_tk_no_network(monkeypatch):
+    """Самопроверка строго без окна Tk и без сети: попытка - сразу сбой."""
+    def bomb(*a, **kw):
+        raise AssertionError("самопроверка не должна трогать Tk и сеть")
+    monkeypatch.setattr(g, "Tk", bomb)
+    monkeypatch.setattr(g.socket, "create_connection", bomb)
+    monkeypatch.setattr(g.rq, "urlopen", bomb)
+    assert g.main(["--self-test"]) == 0
+
+
+def test_main_unknown_args_fall_back_to_gui(monkeypatch):
+    """Незнакомые аргументы - обычный путь GUI (поведение не меняется)."""
+    calls = []
+
+    class Root:
+        def mainloop(self):
+            calls.append("mainloop")
+
+    monkeypatch.setattr(g, "selftest", lambda: calls.append("selftest"))
+    monkeypatch.setattr(g, "Tk", lambda: calls.append("Tk") or Root())
+    monkeypatch.setattr(g, "App", lambda root: calls.append("App"))
+    monkeypatch.setattr(g.os, "_exit", lambda code: calls.append(("exit", code)))
+    g.main(["--bogus"])
+    assert calls == ["selftest", "Tk", "App", "mainloop", ("exit", 0)]
+
+
 def test_save_last_results_oserror_swallowed(monkeypatch):
     """Ошибка записи кэша результатов не роняет проверку (Tg-proxy кэш не критичен)."""
     def boom(path, *a, **kw):
@@ -1333,10 +1393,12 @@ def test_failed_sources_allow_retry(app, tk, monkeypatch):
     assert len(calls) == 2, "упавшие источники не перезакачались повторным кликом"
 
 
-def test_process_exits_after_mainloop(monkeypatch):
-    """os._exit(0) после mainloop - не-daemon воркеры не держат процесс."""
+def test_process_exits_after_mainloop():
+    """os._exit(0) после mainloop - не-daemon воркеры не держат процесс
+    (старт GUI переехал в main(): проверяем хвост исходника после mainloop)."""
     src = open(g.__file__, encoding="utf-8").read()
-    assert "os._exit(0)" in src.split("if __name__")[1], "нет os._exit после mainloop"
+    tail = src.split("root.mainloop()", 1)[1]
+    assert "os._exit(0)" in tail, "нет os._exit после mainloop"
 
 
 def test_zero_alive_next_click_refetches(app, tk, monkeypatch):
