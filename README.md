@@ -73,7 +73,7 @@ The interface supports English and Russian: it follows your system language and 
 
 ## Custom proxy lists
 
-If the built-in sources are not enough, plug in your own list: the "Settings" button - the "Proxy list URL" field. After saving, click "1. Check proxies".
+If the 6 built-in sources are not enough, plug in your own list: the "Settings" button - the "Proxy list URL" field. After saving, click "1. Check proxies".
 
 - An http(s) address of a file with a list is accepted, for example `https://example.com/my_proxies.txt`. While a URL is set, the app uses only it: the built-in sources are skipped. An empty field (or the "All built-in" button) restores the standard sources.
 - File format: proxy links separated by newlines or spaces. Each link has the same form as in public lists: `https://t.me/proxy?server=HOST&port=PORT&secret=SECRET`; `tg://proxy?...` with the same parameters is also accepted. Example:
