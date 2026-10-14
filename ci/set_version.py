@@ -4,7 +4,8 @@
 
 Запуск: python ci/set_version.py v1.0.6 - шаг релизного workflow до pyinstaller.
 Ожидается ровно одна замена; иначе - громкая ошибка и код 1: молчаливый пропуск
-означал бы бинарь с версией из репозитория.
+означал бы бинарь с версией из репозитория. Тег допускается строго вида X.Y.Z
+(с ведущей v или без): суффиксы отвергаются, _version_tuple их не распарсит.
 """
 import re
 import sys
@@ -38,7 +39,15 @@ def main():
         print("использование: python ci/set_version.py vX.Y.Z")
         return 1
     tag = sys.argv[1]
-    return set_version(APP, tag[1:] if tag.startswith("v") else tag)
+    version = tag[1:] if tag.startswith("v") else tag
+    # после среза ведущей v версия обязана быть строго X.Y.Z: суффиксный тег
+    # (v1.0.6-rc1, v2.0) породил бы APP_VERSION, который _version_tuple в
+    # tgproxy_gui не распарсит - бинарь навсегда отвечал бы «последняя версия»
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        print(f"set_version: негодный тег: {tag!r}; ожидался X.Y.Z "
+              f"(с ведущей v или без), без суффиксов - правку не вносил")
+        return 1
+    return set_version(APP, version)
 
 
 if __name__ == "__main__":

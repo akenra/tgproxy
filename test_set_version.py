@@ -71,6 +71,27 @@ def test_main_strips_v_and_writes(mod, tmp_path, monkeypatch):
     assert 'APP_VERSION = "9.9.9"' in f.read_text(encoding="utf-8")
 
 
+def test_main_accepts_tag_without_v(mod, tmp_path, monkeypatch):
+    """Тег без ведущей v ("1.0.6") заменяет так же, как "v1.0.6" (ветка без среза)."""
+    f = write_app(tmp_path, 'APP_VERSION = "1.0.5"\n')
+    monkeypatch.setattr(mod, "APP", f)
+    monkeypatch.setattr(sys, "argv", ["set_version.py", "1.0.6"])
+    assert mod.main() == 0
+    assert 'APP_VERSION = "1.0.6"' in f.read_text(encoding="utf-8")
+
+
+def test_main_rejects_suffix_tag(mod, tmp_path, monkeypatch, capsys):
+    """Суффиксный тег или укороченная версия: отказ кодом 1, файл не тронут."""
+    for tag in ("v1.0.6-rc1", "v2.0"):
+        f = write_app(tmp_path, 'APP_VERSION = "1.0.5"\n')
+        monkeypatch.setattr(mod, "APP", f)
+        monkeypatch.setattr(sys, "argv", ["set_version.py", tag])
+        assert mod.main() == 1, tag
+        out = capsys.readouterr().out
+        assert "X.Y.Z" in out and tag in out, tag
+        assert f.read_text(encoding="utf-8") == 'APP_VERSION = "1.0.5"\n', tag
+
+
 def test_main_without_args_returns_1(mod, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["set_version.py"])
     assert mod.main() == 1
