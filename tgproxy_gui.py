@@ -877,7 +877,6 @@ class App:
             return
         win = self._settings_win = Toplevel(self.root)
         win.title(tr("Настройки"))
-        win.geometry("560x300")
         presets_list = "\n".join(f"  {k}: {v}" for k, v in PRESETS.items())
         Label(win, text=tr("URL списка прокси (формат: t.me/proxy?server=...&port=...&secret=...).\n"
                            "Пустое поле = обойти все предустановленные источники:\n") + presets_list,
@@ -966,6 +965,10 @@ class App:
         Button(win, text=tr("Сохранить"), command=save).pack(side=LEFT, padx=12, pady=8)
         Button(win, text=tr("Все предустановленные"),
                command=lambda: (entry.delete(0, END), entry.insert(0, ""))).pack(side=LEFT, pady=8)
+        # высота по контенту: фиксированные 560x300 обрезали нижний ряд кнопок,
+        # когда список источников вырос (v1.0.8: 6 источников = нужно 321px)
+        win.update_idletasks()
+        win.geometry(f"560x{win.winfo_reqheight()}")
 
 
 def selftest():

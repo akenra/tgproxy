@@ -523,6 +523,17 @@ def test_settings_reopen_reuses_window(app):
     first.destroy()
 
 
+def test_settings_window_fits_content(app):
+    """Высота окна настроек >= требуемой контенту: регрессия v1.0.8 -
+    фиксированные 560x300 сплющили нижний ряд кнопок."""
+    app.show_settings()
+    win = app._settings_win
+    win.update_idletasks()
+    h = int(win.geometry().split("x")[1].split("+")[0])
+    assert h >= win.winfo_reqheight()
+    win.destroy()
+
+
 def test_settings_save_oserror_hint(app, tmp_path, monkeypatch):
     """Регресс: нельзя писать настройки в недоступное место - не падать, а подсказать."""
     import tgproxy_gui as gmod
