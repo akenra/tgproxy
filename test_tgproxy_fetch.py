@@ -96,6 +96,54 @@ def test_fetch_all_invalid_utf8_replaced(monkeypatch):
     assert [(s, p) for _, s, p in proxies] == [("h1", 443)]
 
 
+# ---------- дефолтные источники и предфильтр комментариев ----------
+
+def test_presets_pinned():
+    """Ровно шесть дефолтных источников с точными URL: подмена ключа или адреса ловится."""
+    assert g.PRESETS == {
+        "zakky8": "https://zakky8.github.io/mtproto-proxy-pro/all_proxies.txt",
+        "dubblebyte": "https://raw.githubusercontent.com/dubblebyte/free-mtproto-proxies/main/all_proxies.txt",
+        "soli": "https://raw.githubusercontent.com/SoliSpirit/mtproto/master/all_proxies.txt",
+        "argh94": "https://raw.githubusercontent.com/Argh94/Proxy-List/main/MTProto.txt",
+        "kort0881": "https://raw.githubusercontent.com/kort0881/telegram-proxy-collector/main/proxy_all_mtproto.txt",
+        "aliilapro": "https://raw.githubusercontent.com/ALIILAPRO/MTProtoProxy/main/mtproto.txt",
+    }
+    assert len(g.PRESETS) == 6
+
+
+def test_fetch_all_accepts_tg_links(monkeypatch):
+    """tg://-ссылки реальных форматов (hex64 ee/dd, base64 с %3D) - валидные, не битые."""
+    lines = [
+        "tg://proxy?server=ee.example.com&port=443&secret=" + "ee" + "a" * 62,
+        "tg://proxy?server=dd.example.com&port=8443&secret=" + "dd" + "b" * 62,
+        "tg://proxy?server=b64.example.com&port=2053&secret=AbCdEfGhIjKlMnOpQrStUvx%3D",
+    ]
+    monkeypatch.setattr(g.rq, "urlopen", lambda req, timeout: FakeResponse("\n".join(lines)))
+    proxies, bad, fails, dups = g.fetch_all({"tg": "http://x/"})
+    assert bad == 0 and fails == [] and dups == 0
+    assert [(s, p) for _, s, p in proxies] == [("ee.example.com", 443),
+                                               ("dd.example.com", 8443),
+                                               ("b64.example.com", 2053)]
+    assert all(url.startswith("tg://") for url, _, _ in proxies)
+
+
+def test_fetch_all_comments_skipped(monkeypatch):
+    """Строки-комментарии (# ...) отбрасываются до разбора: не битые, дедуп не задет."""
+    text = "\n".join([
+        "# Updated: 2025-10-14",
+        u("h1", 443),
+        "#",
+        "   # indented comment",
+        u("h1", 443),
+        u("h2", 8443),
+    ])
+    monkeypatch.setattr(g.rq, "urlopen", lambda req, timeout: FakeResponse(text))
+    proxies, bad, fails, dups = g.fetch_all({"src": "http://x/"})
+    assert bad == 0 and fails == []
+    assert dups == 1
+    assert [(s, p) for _, s, p in proxies] == [("h1", 443), ("h2", 8443)]
+
+
 # ---------- alive: двухфазная проверка ----------
 
 def test_alive_true(monkeypatch):

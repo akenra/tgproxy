@@ -29,6 +29,9 @@ PRESETS = {
     "zakky8": "https://zakky8.github.io/mtproto-proxy-pro/all_proxies.txt",
     "dubblebyte": "https://raw.githubusercontent.com/dubblebyte/free-mtproto-proxies/main/all_proxies.txt",
     "soli": "https://raw.githubusercontent.com/SoliSpirit/mtproto/master/all_proxies.txt",
+    "argh94": "https://raw.githubusercontent.com/Argh94/Proxy-List/main/MTProto.txt",
+    "kort0881": "https://raw.githubusercontent.com/kort0881/telegram-proxy-collector/main/proxy_all_mtproto.txt",
+    "aliilapro": "https://raw.githubusercontent.com/ALIILAPRO/MTProtoProxy/main/mtproto.txt",
 }
 TIMEOUT = 5
 OPTS = CheckOptions(connect_timeout=TIMEOUT, response_timeout=TIMEOUT)
@@ -68,7 +71,7 @@ HELP = """ЧТО ДЕЛАЕТ ЭТА ПРОГРАММА
 этого прокси в Telegram.
 
 «Настройки» - URL списка прокси и язык интерфейса. По умолчанию программа
-обходит ВСЕ предустановленные источники (3 проверенных списка,
+обходит ВСЕ предустановленные источники (6 проверенных списков,
 обновляются автоматически каждые 6-12 часов) и отбрасывает
 дубликаты. Можно подставить один свой URL (тогда только он).
 Хранится в файле tgproxy_settings.json рядом с программой.
@@ -120,7 +123,7 @@ Double-click a list row to open the individual link
 of that proxy in Telegram.
 
 "Settings" - proxy list URL and interface language. By default the program
-goes through all built-in sources (3 checked lists,
+goes through all built-in sources (6 checked lists,
 updated automatically every 6-12 hours) and drops
 duplicates. You can plug in one custom URL (then only it is used).
 Stored in the file tgproxy_settings.json next to the program.
@@ -328,6 +331,9 @@ def fetch_all(urls):
         except Exception as e:
             fails.append((name, str(e)))
             continue
+        # строки-комментарии шапок («# ...») отбрасываем до разбора: их токены
+        # («#», «Updated:») иначе считались бы битыми строками
+        text = re.sub(r"(?m)^\s*#.*$", "", text)
         for line in text.split():
             if not valid(line):
                 bad += 1
