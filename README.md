@@ -129,6 +129,8 @@ Issues and pull requests are welcome. Before a PR, run the tests (`python -m pyt
 
 The proxy check itself is done by [mtproxy-checker](https://github.com/alimghmi/mtproxychecker) (MIT) by [alimghmi](https://github.com/alimghmi): thanks for a clean MTProxy handshake implementation. Prebuilt binaries bundle it together with its dependencies; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for their licenses.
 
+The default proxy lists are maintained by their authors: thanks to [SoliSpirit](https://github.com/SoliSpirit), [zakky8](https://github.com/zakky8), [dubblebyte](https://github.com/dubblebyte), [Argh94](https://github.com/Argh94), [kort0881](https://github.com/kort0881) and [ALIILAPRO](https://github.com/ALIILAPRO) for collecting and keeping them fresh.
+
 ## License
 
 MIT - see [LICENSE](LICENSE).

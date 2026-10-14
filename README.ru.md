@@ -129,6 +129,8 @@ Issues и pull request'ы приветствуются. Перед PR прого
 
 Саму проверку выполняет [mtproxy-checker](https://github.com/alimghmi/mtproxychecker) (MIT) от [alimghmi](https://github.com/alimghmi): спасибо за аккуратную реализацию MTProxy-хендшейка. Готовые бинари включают её и её зависимости; их лицензии - в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+Дефолтные списки прокси собирают их авторы: спасибо [SoliSpirit](https://github.com/SoliSpirit), [zakky8](https://github.com/zakky8), [dubblebyte](https://github.com/dubblebyte), [Argh94](https://github.com/Argh94), [kort0881](https://github.com/kort0881) и [ALIILAPRO](https://github.com/ALIILAPRO) за сбор и поддержку свежести.
+
 ## Лицензия
 
 MIT - см. [LICENSE](LICENSE).
