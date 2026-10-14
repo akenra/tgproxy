@@ -1,0 +1,43 @@
+name: sources-watch
+
+on:
+  schedule:
+    # еженедельно, понедельник 06:17 UTC: не ровный час - меньше конкуренции за раннеры
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    # windows-latest: там есть tkinter, tgproxy_gui импортируется как есть
+    runs-on: windows-latest
+    # страховка от зависшего прогона: живому прогону хватает пары минут
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install "mtproxy-checker @ git+https://github.com/alimghmi/mtproxychecker.git"
+      # -X utf8: у раннера stdout в пайпе кодируется cp1252, без флага русская
+      # таблица уронила бы скрипт UnicodeEncodeError. exit 1 (ошибка скачивания
+      # или серия пустот) красит джобу - это и есть алерт.
+      - name: Проверить живость источников
+        run: python -X utf8 ci/check_sources.py
+      # if: always(): состояние коммитится и при красном алертном прогоне;
+      # диффа нет - no-op, пустого коммита не будет
+      - name: Зафиксировать состояние
+        if: always()
+        shell: bash
+        run: |
+          if [ -z "$(git status --porcelain -- ci/sources-status.json)" ]; then
+            echo "Состояние не изменилось - коммита нет"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ci/sources-status.json
+          git commit -m "chore: обновить статус источников"
+          git push
