@@ -1,38 +1,38 @@
 {
   "aliilapro": {
     "empty_streak": 0,
-    "last_count": 164,
+    "last_count": 215,
     "last_error": null,
-    "last_ok": "2026-10-14"
+    "last_ok": "2026-10-19"
   },
   "argh94": {
     "empty_streak": 0,
-    "last_count": 215,
+    "last_count": 253,
     "last_error": null,
-    "last_ok": "2026-10-14"
+    "last_ok": "2026-10-19"
   },
   "dubblebyte": {
     "empty_streak": 0,
-    "last_count": 92,
+    "last_count": 95,
     "last_error": null,
-    "last_ok": "2026-10-14"
+    "last_ok": "2026-10-19"
   },
   "kort0881": {
     "empty_streak": 0,
-    "last_count": 234,
+    "last_count": 278,
     "last_error": null,
-    "last_ok": "2026-10-14"
+    "last_ok": "2026-10-19"
   },
   "soli": {
-    "empty_streak": 0,
-    "last_count": 164,
+    "empty_streak": 1,
+    "last_count": 0,
     "last_error": null,
     "last_ok": "2026-10-14"
   },
   "zakky8": {
     "empty_streak": 0,
-    "last_count": 334,
+    "last_count": 333,
     "last_error": null,
-    "last_ok": "2026-10-14"
+    "last_ok": "2026-10-19"
   }
 }
